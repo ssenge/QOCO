@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qoco"
+version = "0.0.0"
+description = "Quantum Optimization COre"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.23",
+  "pyomo>=6.6",
+]
+
+[project.optional-dependencies]
+rl = [
+  "torch>=2.1",
+  "tensordict>=0.2",
+  "lightning>=2.1",
+  "rl4co>=0.4",
+]
+qiskit = [
+  "qiskit>=1.0",
+  "qiskit-aer>=0.13",
+  "qiskit-algorithms>=0.3",
+  "qiskit-optimization>=0.6",
+  "qiskit-machine-learning>=0.7",
+]
+dwave = [
+  "dimod>=0.12",
+  "dwave-samplers>=1.2",
+]
+planqk = [
+  "planqk-service-sdk>=2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qoco*"]
