@@ -7,6 +7,23 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class QuboVarEncoding:
+    """Encoding for an original variable into QUBO bits."""
+
+    offset: float
+    terms: Dict[str, float]
+    upper_bound: float
+
+
+@dataclass(frozen=True)
+class QuboMetadata:
+    """Optional metadata to decode QUBO solutions."""
+
+    encodings: Dict[str, QuboVarEncoding]
+    slack_prefixes: Tuple[str, ...] = ("slack_le", "slack_ge")
+
+
+@dataclass(frozen=True)
 class QUBO:
     """A QUBO in matrix form: minimize x^T Q x + offset.
 
@@ -19,6 +36,7 @@ class QUBO:
     Q: np.ndarray
     offset: float
     var_map: Dict[str, int]
+    metadata: QuboMetadata | None = None
 
     @property
     def n_vars(self) -> int:

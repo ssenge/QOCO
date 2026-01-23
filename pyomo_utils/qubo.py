@@ -24,7 +24,7 @@ def qubo_from_pyomo_model(model: pyo.ConcreteModel) -> QUBO:
     vars_list = list(_iter_active_vardata(model))
     n = len(vars_list)
     if n == 0:
-        return QUBO(Q=np.zeros((0, 0), dtype=np.float64), offset=0.0, var_map={})
+        return QUBO(Q=np.zeros((0, 0), dtype=np.float64), offset=0.0, var_map={}, metadata=None)
 
     var_to_idx = {id(v): i for i, v in enumerate(vars_list)}
     var_map = {v.name: i for i, v in enumerate(vars_list)}
@@ -57,5 +57,5 @@ def qubo_from_pyomo_model(model: pyo.ConcreteModel) -> QUBO:
                 row, col = (i, j) if i < j else (j, i)
                 Q[row, col] += float(coef)
 
-    return QUBO(Q=Q, offset=float(offset), var_map=var_map)
+    return QUBO(Q=Q, offset=float(offset), var_map=var_map, metadata=None)
 
