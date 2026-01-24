@@ -5,6 +5,7 @@ Solution class for optimization results.
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, Optional
+import ast
 
 
 class Status(Enum):
@@ -50,4 +51,23 @@ class Solution:
         status_str = "✓ " + self.status.name if self.feasible else "✗ " + self.status.name
         time_str = f", tts={self.tts:.3f}s" if self.tts is not None else ""
         return f"Solution({status_str}, obj={self.objective:.4f}, vars={len(self.var_values)}{time_str})"
+
+    @staticmethod
+    def _parse_index(text: str) -> Any:
+        try:
+            return ast.literal_eval(text)
+        except Exception:
+            return text
+
+    def selected_indices(self, var_name: str, threshold: float = 0.5) -> list[Any]:
+        prefix = f"{var_name}["
+        out: list[Any] = []
+        for key, value in self.var_values.items():
+            if not key.startswith(prefix) or not key.endswith("]"):
+                continue
+            if value is None or value < threshold:
+                continue
+            idx_text = key[len(prefix) : -1]
+            out.append(self._parse_index(idx_text))
+        return out
 

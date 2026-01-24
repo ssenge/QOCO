@@ -31,8 +31,12 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
     time_limit: Optional[float] = None
     mip_gap: Optional[float] = None
     verbose: bool = False
+    capture_duals: bool = False
     
     def _optimize(self, model: pyo.ConcreteModel) -> Solution:
+        if self.capture_duals and not hasattr(model, "dual"):
+            model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
+
         # Create solver
         solver = pyo.SolverFactory('appsi_highs')
         
@@ -73,8 +77,26 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
             obj_val = float('inf')
             status = Status.UNKNOWN
         
+        info: dict[str, object] = {}
+        if self.capture_duals and status in (Status.OPTIMAL, Status.FEASIBLE):
+            duals: dict[str, float] = {}
+            for con in model.component_objects(pyo.Constraint, active=True):
+                if con.is_indexed():
+                    for idx in con:
+                        cdata = con[idx]
+                        dv = model.dual.get(cdata, None)
+                        if dv is not None:
+                            duals[f"{con.name}[{idx}]"] = float(dv)
+                else:
+                    dv = model.dual.get(con, None)
+                    if dv is not None:
+                        duals[con.name] = float(dv)
+            if duals:
+                info["duals"] = duals
+
         return Solution(
             status=status,
             objective=obj_val,
             var_values=var_values,
+            info=info,
         )

@@ -1,0 +1,3 @@
+"""
+Bin packing example problem.
+"""
