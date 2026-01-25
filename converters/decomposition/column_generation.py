@@ -38,6 +38,9 @@ class PricingAdapter(ABC):
     def partitions(self) -> Sequence[Any] | None:
         return None
 
+    def seed(self, duals: Dict[RowKey, float]) -> list[Column]:
+        return []
+
     @abstractmethod
     def build(self, duals: Dict[RowKey, float], partition: Any | None = None) -> Any: ...
 

@@ -49,6 +49,12 @@ class BinPackingPricing(PricingAdapter):
         )
         return PricingResult(column=col, reduced_cost=reduced_cost)
 
+    def seed(self, duals: dict[int, float]) -> list[Column]:
+        return [
+            Column(id=f"bin_{i}", cost=1.0, coverage={i: 1.0})
+            for i in range(len(self.sizes))
+        ]
+
 
 def test_column_generation_binpacking() -> None:
     sizes = [4, 4, 3, 2, 2]
@@ -62,21 +68,17 @@ def test_column_generation_binpacking() -> None:
     )
     rows = list(range(len(sizes)))
 
-    initial_columns = [
-        Column(id="bin_0_1", cost=1.0, coverage={0: 1.0, 1: 1.0}),
-        Column(id="bin_2_3", cost=1.0, coverage={2: 1.0, 3: 1.0}),
-        Column(id="bin_4", cost=1.0, coverage={4: 1.0}),
-    ]
+    pricing = BinPackingPricing(sizes=sizes, capacity=capacity)
+    pricing_solver = HiGHSOptimizer()
+    initial_columns = pricing.seed({s: 0.0 for s in rows})
     master = SetPartitionMaster(
         rows=rows,
         columns=list(initial_columns),
         lp_relaxation=True,
     )
-    pricing = BinPackingPricing(sizes=sizes, capacity=capacity)
     decomp = ColumnGenerationDecomposition(master=master, pricing=pricing)
 
     master_solver = HiGHSOptimizer(capture_duals=True)
-    pricing_solver = HiGHSOptimizer()
     final_solver = pricing_solver
     final_strategy = IntegerMasterStrategy(optimizer=final_solver)
 
