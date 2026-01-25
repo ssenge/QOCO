@@ -2,13 +2,14 @@
 Simulated Annealing optimizer for QUBO matrices.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, Optional, Sequence
 import numpy as np
 
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 from ..core.qubo import QUBO
 
 
@@ -27,7 +28,7 @@ class SimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
         max_iter: Maximum iterations
         seed: Random seed for reproducibility
     """
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     T_initial: float = 100.0
     T_final: float = 0.01
     cooling_rate: float = 0.9995

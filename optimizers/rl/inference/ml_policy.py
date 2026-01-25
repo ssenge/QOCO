@@ -6,6 +6,7 @@ from typing import Any, Generic, TypeVar
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.solution import Solution
+from qoco.converters.identity import IdentityConverter
 from qoco.optimizers.rl.shared.base import PolicyRunner, RLAdapter
 
 
@@ -16,7 +17,7 @@ AdapterT = TypeVar("AdapterT", bound=RLAdapter)
 class MLPolicyOptimizer(Generic[P, AdapterT], Optimizer[P, Any, Solution]):
     """Inference-only Optimizer wrapper for ML policies."""
 
-    converter: Converter[P, Any]
+    converter: Converter[P, Any] = field(default_factory=IdentityConverter)
     adapter: AdapterT
     checkpoint_path: Path
     runner_cls: type[PolicyRunner[AdapterT]]

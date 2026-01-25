@@ -1,35 +1,19 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, List, Optional, Tuple
-
-import numpy as np
+from dataclasses import dataclass, field
+from typing import List, Tuple
 import pyomo.environ as pyo
 
 from qoco.core.converter import Converter
 from qoco.core.problem import Problem
 
 
-@dataclass(frozen=True)
-class BinPackingMatrices:
-    n: int
-    m: int
-    weights: np.ndarray
-    capacity: float
-    name: Optional[str] = None
-    id: Optional[str] = None
-    optimal_bins: Optional[int] = None
-    optimal_time: Optional[float] = None
-
-
 @dataclass
 class BinPacking(Problem):
     name: str
-    weights: np.ndarray
+    weights: list[float]
     capacity: float
-    m: int
+    m: int  # bin upper bound 
 
     def validate(self) -> Tuple[bool, List[str]]:
         errors: List[str] = []
@@ -37,13 +21,11 @@ class BinPacking(Problem):
             errors.append("capacity must be > 0")
         if self.m <= 0:
             errors.append("m (bin upper bound) must be > 0")
-        if self.weights.ndim != 1:
-            errors.append("weights must be a 1D array")
-        if self.weights.size == 0:
+        if not self.weights:
             errors.append("no items (n=0)")
-        if np.any(self.weights <= 0):
+        if any(w <= 0 for w in self.weights):
             errors.append("all weights must be > 0")
-        if np.any(self.weights > self.capacity):
+        if any(w > self.capacity for w in self.weights):
             errors.append("some weights exceed capacity (instance infeasible)")
         return len(errors) == 0, errors
 
@@ -52,18 +34,18 @@ class BinPacking(Problem):
         status = "✓ Valid" if valid else f"✗ {len(errors)} errors"
         return (
             f"BinPacking('{self.name}')\n"
-            f"  n={int(self.weights.size)} items\n"
-            f"  m={int(self.m)} bins (upper bound)\n"
-            f"  capacity={float(self.capacity):.3g}\n"
+            f"  n={len(self.weights)} items\n"
+            f"  m={self.m} bins (upper bound)\n"
+            f"  capacity={self.capacity:.3g}\n"
             f"  Status: {status}"
         )
 
-    class MILPConverter(Converter[Any, pyo.ConcreteModel]):
-        def convert(self, problem: Any) -> pyo.ConcreteModel:
-            n = int(problem.n) if hasattr(problem, "n") else int(np.asarray(problem.weights).shape[0])
-            m = int(problem.m)
-            w = np.asarray(problem.weights, dtype=float)
-            cap = float(problem.capacity)
+    class MILPConverter(Converter["BinPacking", pyo.ConcreteModel]):
+        def convert(self, problem: "BinPacking") -> pyo.ConcreteModel:
+            n = len(problem.weights)
+            m = problem.m
+            w = problem.weights
+            cap = problem.capacity
 
             model = pyo.ConcreteModel(name=getattr(problem, "name", None) or "BinPacking")
             model.B = pyo.RangeSet(0, m - 1)
@@ -85,23 +67,14 @@ class BinPacking(Problem):
             return model
 
 
-def load_test_instances_json(path: Path, *, limit: int) -> List[BinPackingMatrices]:
-    data = json.loads(path.read_text())
-    out: List[BinPackingMatrices] = []
-    for item in data[: int(limit)]:
-        weights = np.array(item["weights"], dtype=np.float32)
-        cap = float(item["capacity"])
-        m = int(item.get("m", len(weights)))
-        out.append(
-            BinPackingMatrices(
-                n=int(len(weights)),
-                m=m,
-                weights=weights,
-                capacity=cap,
-                name=item.get("name"),
-                id=item.get("id"),
-                optimal_bins=int(item["optimal_bins"]) if "optimal_bins" in item else None,
-                optimal_time=float(item["optimal_time"]) if "optimal_time" in item else None,
-            )
-        )
-    return out
+@dataclass
+class Knapsack(BinPacking):
+    m: int = field(init=False, default=1)
+
+    def __post_init__(self) -> None:
+        self.m = 1
+
+
+    class MILPConverter(BinPacking.MILPConverter):
+        pass
+

@@ -14,6 +14,7 @@ from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution
+from qoco.converters.identity import IdentityConverter
 from qoco.optimizers.qiskit_min_eigen import QiskitMinimumEigensolverOptimizer
 
 
@@ -21,7 +22,7 @@ from qoco.optimizers.qiskit_min_eigen import QiskitMinimumEigensolverOptimizer
 class QiskitSamplingVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     """Qiskit SamplingVQE on QUBOs (via MinimumEigenOptimizer)."""
 
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
 
     reps: int = 1
     classical_optimizer: Any = field(default_factory=lambda: COBYLA(maxiter=100))

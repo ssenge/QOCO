@@ -15,6 +15,7 @@ from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
@@ -26,7 +27,7 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     circuit to extract a bitstring solution.
     """
 
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Any = field(default_factory=QuboToQuadraticProgramConverter)
 
     reps: int = 1

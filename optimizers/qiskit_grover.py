@@ -14,6 +14,7 @@ from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -27,7 +28,7 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
 class QiskitGroverOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     """Qiskit GroverOptimizer on QUBO (tiny problems only)."""
 
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Any = field(default_factory=QuboToQuadraticProgramConverter)
 
     num_value_qubits: int = 8

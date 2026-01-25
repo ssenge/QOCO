@@ -11,6 +11,15 @@ from qoco.core.solution import Solution
 RowKey = Hashable
 
 
+def set_pricing_objective(model: pyo.ConcreteModel, expr: pyo.Expression, name: str = "obj_reduced") -> None:
+    if hasattr(model, "obj"):
+        model.obj.deactivate()
+    if hasattr(model, name):
+        getattr(model, name).set_value(expr)
+        return
+    model.add_component(name, pyo.Objective(expr=expr, sense=pyo.minimize))
+
+
 @dataclass
 class Column:
     id: str

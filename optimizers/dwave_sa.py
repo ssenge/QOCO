@@ -12,6 +12,7 @@ from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution, Status
 from qoco.converters.qubo_to_bqm import QuboToBQMConverter
+from qoco.converters.identity import IdentityConverter
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -25,7 +26,7 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
 class DWaveSimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     """Solve QUBOs using D-Wave's SimulatedAnnealingSampler (classical)."""
 
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_bqm: Converter[QUBO, dimod.BinaryQuadraticModel] = field(default_factory=QuboToBQMConverter)
 
     num_reads: int = 128

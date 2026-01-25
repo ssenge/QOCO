@@ -5,7 +5,7 @@ Works on any Pyomo ConcreteModel with binary variables.
 Only suitable for tiny instances (< 20 binary variables).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic
 from itertools import product
 
@@ -15,6 +15,7 @@ from qoco.core.problem import Problem
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
@@ -25,7 +26,7 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution])
     Works on any Pyomo model with binary variables.
     Only for testing with tiny instances!
     """
-    converter: Converter[P, pyo.ConcreteModel]
+    converter: Converter[P, pyo.ConcreteModel] = field(default_factory=IdentityConverter)
     max_vars: int = 20  # Safety limit: 2^20 = ~1M iterations
     
     def _optimize(self, model: pyo.ConcreteModel) -> Solution:

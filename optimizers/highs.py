@@ -4,7 +4,7 @@ HiGHS optimizer - high-performance MILP/LP solver.
 Uses Pyomo's appsi_highs interface to the HiGHS solver.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, Optional
 
 import pyomo.environ as pyo
@@ -14,6 +14,7 @@ from qoco.core.problem import Problem
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
@@ -27,7 +28,7 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
         mip_gap: Relative MIP gap tolerance (e.g., 0.01 = 1%)
         verbose: Print solver output
     """
-    converter: Converter[P, pyo.ConcreteModel]
+    converter: Converter[P, pyo.ConcreteModel] = field(default_factory=IdentityConverter)
     time_limit: Optional[float] = None
     mip_gap: Optional[float] = None
     verbose: bool = False

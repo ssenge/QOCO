@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -10,6 +10,7 @@ from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 from qoco.converters.qubo_to_dict import QuboToDictConverter
 
 
@@ -28,7 +29,7 @@ class MirayOptimizer(Optimizer[P, dict[str, float], Solution]):
     consumer_key: str
     consumer_secret: str
     variant: str  # "managed" or "simulator"
-    converter: Converter[P, dict[str, float]]
+    converter: Converter[P, dict[str, float]] = field(default_factory=IdentityConverter)
     token_endpoint: str = "https://gateway.hub.kipu-quantum.com/token"
     shots: int = 1000
     num_iterations: int = 3

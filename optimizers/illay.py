@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -9,6 +9,7 @@ from planqk.service.client import PlanqkServiceClient
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -22,7 +23,7 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
 class IllayOptimizer(Optimizer[P, dict[str, float], Solution]):
     """Solve QUBOs using Kipu Quantum Illay service (simulator)."""
 
-    converter: Converter[P, dict[str, float]]
+    converter: Converter[P, dict[str, float]] = field(default_factory=IdentityConverter)
     service_endpoint: str
     consumer_key: str
     consumer_secret: str

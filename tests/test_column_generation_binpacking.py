@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import numpy as np
 import pyomo.environ as pyo
 
 from qoco.converters.decomposition.column_generation import (
@@ -10,9 +9,9 @@ from qoco.converters.decomposition.column_generation import (
     PricingAdapter,
     PricingResult,
     SetPartitionMaster,
+    set_pricing_objective,
 )
-from qoco.converters.identity import IdentityConverter
-from qoco.examples.problems.binpacking.problem import BinPacking
+from qoco.examples.problems.binpacking.problem import BinPacking, Knapsack
 from qoco.core.solution import Solution, Status
 from qoco.optimizers.decomposition.column_generation import ColumnGenSolver, IntegerMasterStrategy
 from qoco.optimizers.highs import HiGHSOptimizer
@@ -24,22 +23,23 @@ class BinPackingPricing(PricingAdapter):
     capacity: int
 
     def build(self, duals: dict[int, float], partition=None) -> pyo.ConcreteModel:
-        # Pricing for BinPacking degenerates to a 0-1 knapsack for one bin.
-        model = pyo.ConcreteModel()
-        model.I = pyo.RangeSet(0, len(self.sizes) - 1)
-        model.x = pyo.Var(model.I, domain=pyo.Binary)
-        model.cap = pyo.Constraint(
-            expr=sum(self.sizes[i] * model.x[i] for i in model.I) <= self.capacity
+        # Pricing for BinPacking degenerates to a 0-1 knapsack.
+        knapsack = Knapsack(
+            name="colgen_pricing_knapsack",
+            weights=[s for s in self.sizes],
+            capacity=self.capacity,
         )
-        model.obj = pyo.Objective(
-            expr=1 - sum(duals.get(i, 0.0) * model.x[i] for i in model.I),
-            sense=pyo.minimize,
-        )
+        model = Knapsack.MILPConverter().convert(knapsack)
+        model.cover.deactivate()  # Deactivate (global) coverage constraint
+        set_pricing_objective(model, 1 - sum(duals[i] * model.x[0, i] for i in model.I))
         return model
 
     def extract(self, problem: pyo.ConcreteModel, solution: Solution) -> PricingResult:
-        reduced_cost = solution.objective
-        chosen = solution.selected_indices("x")
+        reduced_cost = pyo.value(problem.obj_reduced.expr)
+        chosen = [
+            idx[1] if isinstance(idx, tuple) else idx
+            for idx in solution.selected_indices("x")
+        ]
         if not chosen:
             return PricingResult(column=None, reduced_cost=reduced_cost)
         col = Column(
@@ -56,7 +56,7 @@ def test_column_generation_binpacking() -> None:
     num_bins = 3
     problem = BinPacking(
         name="binpacking_colgen_test",
-        weights=np.array(sizes, dtype=float),
+        weights=[float(s) for s in sizes],
         capacity=capacity,
         m=num_bins,
     )
@@ -71,14 +71,13 @@ def test_column_generation_binpacking() -> None:
         rows=rows,
         columns=list(initial_columns),
         lp_relaxation=True,
-        exact_count=num_bins,
     )
     pricing = BinPackingPricing(sizes=sizes, capacity=capacity)
     decomp = ColumnGenerationDecomposition(master=master, pricing=pricing)
 
-    master_solver = HiGHSOptimizer(converter=IdentityConverter(), verbose=False, capture_duals=True)
-    pricing_solver = HiGHSOptimizer(converter=IdentityConverter(), verbose=False)
-    final_solver = HiGHSOptimizer(converter=IdentityConverter(), verbose=False)
+    master_solver = HiGHSOptimizer(capture_duals=True)
+    pricing_solver = HiGHSOptimizer()
+    final_solver = pricing_solver
     final_strategy = IntegerMasterStrategy(optimizer=final_solver)
 
     solver = ColumnGenSolver(
@@ -86,20 +85,17 @@ def test_column_generation_binpacking() -> None:
         master_solver=master_solver,
         pricing_solver=pricing_solver,
         final_step_strategy=final_strategy,
-        tol=1e-6,
         max_steps=100,
     )
     solution = solver.run()
 
     oracle_converter = BinPacking.MILPConverter()
     oracle_model = oracle_converter.convert(problem)
-    oracle_model.count = pyo.Constraint(expr=sum(oracle_model.y[b] for b in oracle_model.B) == num_bins)
-    oracle_solver = HiGHSOptimizer(converter=IdentityConverter(), verbose=False)
+    oracle_solver = HiGHSOptimizer()
     oracle_solution = oracle_solver.optimize(oracle_model, log=False)
 
     assert solution.status in (Status.OPTIMAL, Status.FEASIBLE)
     assert oracle_solution.status == Status.OPTIMAL
-    assert solution.objective == num_bins
-    assert oracle_solution.objective == num_bins
+    assert solution.objective == oracle_solution.objective
     assert int(solution.info.get("colgen_iters", 0)) >= 1
     assert int(solution.info.get("colgen_columns", 0)) > len(initial_columns)

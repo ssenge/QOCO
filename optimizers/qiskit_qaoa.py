@@ -14,6 +14,7 @@ from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -34,7 +35,7 @@ def _bitstring_to_x(bitstring: str, n: int) -> np.ndarray:
 class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     """Solve QUBOs using Qiskit's QAOA (simulated via Aer SamplerV2 by default)."""
 
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Converter[QUBO, Any] = field(default_factory=QuboToQuadraticProgramConverter)
 
     reps: int = 1

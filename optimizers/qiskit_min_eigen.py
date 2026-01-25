@@ -10,6 +10,7 @@ from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -41,7 +42,7 @@ def _result_to_solution(*, qubo: QUBO, x: np.ndarray, fval: float, info: dict[st
 class QiskitMinimumEigensolverOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     """Generic wrapper for Qiskit Optimization's `MinimumEigenOptimizer` on QUBOs."""
 
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Any = field(default_factory=QuboToQuadraticProgramConverter)
     minimum_eigensolver: Any = None
 

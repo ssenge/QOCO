@@ -14,6 +14,7 @@ import numpy as np
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
 from qoco.core.solution import Solution, Status
+from qoco.converters.identity import IdentityConverter
 from ..core.qubo import QUBO
 
 
@@ -42,7 +43,7 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
         seed: Random seed
         verbose: Print progress every N nodes (0 = silent)
     """
-    converter: Converter[P, QUBO]
+    converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     max_nodes: int = 10000
     max_vars_exact: int = 20  # 2^20 = ~1M combinations (increased default)
     branch_strategy: str = "first_free"
