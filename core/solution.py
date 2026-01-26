@@ -52,6 +52,21 @@ class Solution:
         time_str = f", tts={self.tts:.3f}s" if self.tts is not None else ""
         return f"Solution({status_str}, obj={self.objective:.4f}, vars={len(self.var_values)}{time_str})"
 
+    def equals(self, other: object, *, objective_tol: float = 1e-8) -> bool:
+        if not isinstance(other, Solution):
+            return False
+        if abs(float(self.objective) - float(other.objective)) > float(objective_tol):
+            return False
+        for name, value in self.var_values.items():
+            if name not in other.var_values:
+                return False
+            if other.var_values[name] != value:
+                return False
+        return True
+
+    def __eq__(self, other: object) -> bool:
+        return self.equals(other)
+
     @staticmethod
     def _parse_index(text: str) -> Any:
         try:

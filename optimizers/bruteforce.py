@@ -103,7 +103,8 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution])
         """Extract all variable values (both free and fixed)."""
         var_values = {}
         for var, idx in free_vars + fixed_vars:
-            var_values[f"{var.name}[{idx}]"] = pyo.value(var[idx])
+            v = var[idx]
+            var_values[v.name] = pyo.value(v)
         return var_values
     
     def _is_feasible(self, model: pyo.ConcreteModel) -> bool:

@@ -35,7 +35,7 @@ def decode_assignment(qubo: QUBO, x: np.ndarray) -> Dict[str, float]:
             if idx is None:
                 continue
             value += float(weight) * float(x[idx])
-        decoded[_normalize_name(name)] = value
+        decoded[name] = value
     return decoded
 
 
@@ -47,7 +47,7 @@ def extract_binary_assignments(
     for name, val in var_values.items():
         if not name.startswith(tuple(prefixes)):
             continue
-        assignments[_normalize_name(name)] = int(round(val))
+        assignments[name] = int(round(val))
     return assignments
 
 

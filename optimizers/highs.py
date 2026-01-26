@@ -69,7 +69,7 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
                     v = var[idx]
                     val = pyo.value(v)
                     if val is not None:
-                        var_values[f"{var.name}[{idx}]"] = val
+                        var_values[v.name] = val
         
         # Get objective value
         try:
