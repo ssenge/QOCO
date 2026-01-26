@@ -13,14 +13,14 @@ from qoco.optimizers.rl.shared.base import PolicyRunner, RLAdapter
 AdapterT = TypeVar("AdapterT", bound=RLAdapter)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class MLPolicyOptimizer(Generic[P, AdapterT], Optimizer[P, Any, Solution]):
     """Inference-only Optimizer wrapper for ML policies."""
 
-    converter: Converter[P, Any] = field(default_factory=IdentityConverter)
     adapter: AdapterT
     checkpoint_path: Path
     runner_cls: type[PolicyRunner[AdapterT]]
+    converter: Converter[P, Any] = field(default_factory=IdentityConverter)
     device: str = "cpu"
 
     _runner: PolicyRunner[AdapterT] = field(init=False, repr=False)

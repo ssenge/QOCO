@@ -37,9 +37,9 @@ class GlobalBiasAttentionEncoder(nn.Module):
 
 @dataclass(eq=False)
 class GlobalBiasAttentionModel(nn.Module):
-    model_name: str = "global_bias"
     cfg: AMConfig
     device: str = "cpu"
+    model_name: str = "global_bias"
 
     def __post_init__(self) -> None:
         super().__init__()
