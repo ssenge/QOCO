@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Generic, TypeVar
 
 from .converter import Converter
+from qoco.converters.identity import IdentityConverter
 from .logging import JsonlLogger, start_run
 
 # Type variables
@@ -30,7 +31,7 @@ class Optimizer(ABC, Generic[P, T, R]):
         R: Result type
     """
 
-    converter: Converter[P, T]
+    converter: Converter[P, T] = field(default_factory=IdentityConverter)
     _logger: JsonlLogger | None = field(default=None, init=False, repr=False)
     _logger_started: float | None = field(default=None, init=False, repr=False)
 

@@ -16,7 +16,7 @@ Map = TypeVar("Map", bound=CollapseMapping)
 
 @dataclass
 class OptimizerPipeline(Generic[P, M, R, Map]):
-    loader: Callable[[], P]
+    init: Callable[[], P]
     reducers: list[Reducer[P]]
     collapsers: list[Collapser[P, Map]]
     preproc: Callable[[PipelineContext], None]
@@ -25,7 +25,7 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
     postproc: Callable[[PipelineContext], None]
 
     def _load(self, ctx: PipelineContext) -> None:
-        ctx["instance"] = self.loader()
+        ctx["instance"] = self.init()
 
     def run(self) -> PipelineContext:
         ctx = PipelineContext()

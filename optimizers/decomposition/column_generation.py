@@ -62,26 +62,36 @@ class BranchAndPriceStrategy:
         raise NotImplementedError("Branch-and-price strategy not implemented yet.")
 
 
-@dataclass(frozen=True)
-class ColumnGenSolver:
-    decomp: ColumnGenerationDecomposition
-    master_solver: Optimizer[pyo.ConcreteModel, object, Solution]
-    pricing_solver: Optimizer[Any, object, Solution]
+@dataclass
+class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationDecomposition, Solution]):
+    master_solver: Optimizer[pyo.ConcreteModel, object, Solution] | None = None
+    pricing_solver: Optimizer[Any, object, Solution] | None = None
     final_step_strategy: FinalStepStrategy | None = None
     tol: float = 1e-6
     max_steps: int = 10_000
     time_limit_s: float | None = None
 
-    def run(self) -> Solution:
+    def __post_init__(self) -> None:
+        if self.master_solver is None:
+            raise ValueError("master_solver is required")
+        if self.pricing_solver is None:
+            raise ValueError("pricing_solver is required")
+
+    def _optimize(self, decomp: ColumnGenerationDecomposition) -> Solution:
         state = ColumnGenState(
-            master=self.decomp.master,
-            pricing=self.decomp.pricing,
+            master=decomp.master,
+            pricing=decomp.pricing,
             master_solver=self.master_solver,
             pricing_solver=self.pricing_solver,
             tol=self.tol,
         )
         plan = ClassicColumnGenPlan()
-        sol = MultiStageSolver(plan=plan, state=state, max_steps=int(self.max_steps), time_limit_s=self.time_limit_s).run()
+        sol = MultiStageSolver(
+            plan=plan,
+            state=state,
+            max_steps=int(self.max_steps),
+            time_limit_s=self.time_limit_s,
+        ).run()
         if self.final_step_strategy is None:
             return sol
         return self.final_step_strategy.run(state)

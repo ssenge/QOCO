@@ -4,7 +4,7 @@ Solution class for optimization results.
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 import ast
 
 
@@ -52,20 +52,29 @@ class Solution:
         time_str = f", tts={self.tts:.3f}s" if self.tts is not None else ""
         return f"Solution({status_str}, obj={self.objective:.4f}, vars={len(self.var_values)}{time_str})"
 
-    def equals(self, other: object, *, objective_tol: float = 1e-8) -> bool:
+    def equals(
+        self,
+        other: object,
+        objective_tol: float = 1e-8,
+        var_names: Iterable[str] | None = None,
+    ) -> bool:
         if not isinstance(other, Solution):
             return False
         if abs(float(self.objective) - float(other.objective)) > float(objective_tol):
             return False
-        for name, value in self.var_values.items():
-            if name not in other.var_values:
-                return False
-            if other.var_values[name] != value:
-                return False
-        return True
+        if var_names is None:
+            var_names = self.var_values.keys()
+        return all(
+            name in other.var_values and other.var_values[name] == self.var_values[name]
+            for name in var_names
+        )
+    
+    def equals_common_vars(self, other: object) -> bool:
+        var_names = set(self.var_values.keys()) & set(other.var_values.keys())
+        return self.equals(other, var_names=var_names)
 
     def __eq__(self, other: object) -> bool:
-        return self.equals(other)
+        return self.equals_common_vars(other)
 
     @staticmethod
     def _parse_index(text: str) -> Any:

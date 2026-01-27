@@ -11,9 +11,10 @@ from qoco.converters.decomposition.column_generation import (
     SetPartitionMaster,
     set_pricing_objective,
 )
+from qoco.converters.identity import IdentityConverter
 from qoco.examples.problems.binpacking.problem import BinPacking, Knapsack
 from qoco.core.solution import Solution, Status
-from qoco.optimizers.decomposition.column_generation import ColumnGenSolver, IntegerMasterStrategy
+from qoco.optimizers.decomposition.column_generation import ColGenOptimizer, IntegerMasterStrategy
 from qoco.optimizers.highs import HiGHSOptimizer
 
 
@@ -82,14 +83,14 @@ def test_column_generation_binpacking() -> None:
     final_solver = pricing_solver
     final_strategy = IntegerMasterStrategy(optimizer=final_solver)
 
-    solver = ColumnGenSolver(
-        decomp=decomp,
+    optimizer = ColGenOptimizer(
+        converter=IdentityConverter(),
         master_solver=master_solver,
         pricing_solver=pricing_solver,
         final_step_strategy=final_strategy,
         max_steps=100,
     )
-    solution = solver.run()
+    solution = optimizer.optimize(decomp, log=False)
 
     oracle_converter = BinPacking.MILPConverter()
     oracle_model = oracle_converter.convert(problem)
