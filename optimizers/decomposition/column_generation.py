@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import time
 from typing import Any, Protocol
 
 import pyomo.environ as pyo
@@ -9,8 +10,34 @@ import pyomo.environ as pyo
 from qoco.converters.decomposition.column_generation import ColumnGenerationDecomposition, SetPartitionMaster
 from qoco.core.optimizer import Optimizer
 from qoco.core.solution import Solution, Status
-from qoco.optimizers.decomposition.multistage import MultiStageSolver
-from qoco.optimizers.decomposition.plans.column_generation import ClassicColumnGenPlan, ColumnGenState
+from qoco.optimizers.decomposition.plans.column_generation import ColumnGenState
+
+
+@dataclass(frozen=True)
+class ColGenIterLog:
+    it: int
+    num_columns: int
+    master_obj: float | None
+    pricing_partition: Any | None
+    pricing_reduced_cost: float | None
+    added_column: tuple[Any, ...] | None
+    duals: dict[Any, float] | None
+
+    def __str__(self) -> str:
+        return (
+            f"ColGenIterLog(it={self.it}, columns={self.num_columns}, "
+            f"master_obj={self.master_obj}, partition={self.pricing_partition}, "
+            f"reduced_cost={self.pricing_reduced_cost}, added={self.added_column}, "
+            f"duals={self.duals})"
+        )
+
+
+@dataclass(frozen=True)
+class ColGenRunLog:
+    iterations: list[ColGenIterLog]
+
+    def __str__(self) -> str:
+        return "ColGenRunLog\n" + "\n".join(str(it) for it in self.iterations)
 
 
 class FinalStepStrategy(Protocol):
@@ -20,7 +47,13 @@ class FinalStepStrategy(Protocol):
 @dataclass(frozen=True)
 class NoFinalStepStrategy:
     def run(self, state: ColumnGenState) -> Solution:
-        return ClassicColumnGenPlan().to_solution(state)
+        if state.last_master_solution is None:
+            return Solution(status=Status.UNKNOWN, objective=math.inf, var_values={}, info={"iters": int(state.it)})
+        out = state.last_master_solution
+        out.info = dict(out.info)
+        out.info.setdefault("colgen_iters", int(state.it))
+        out.info.setdefault("colgen_columns", int(len(state.master.columns)))
+        return out
 
 
 @dataclass(frozen=True)
@@ -65,7 +98,6 @@ class BranchAndPriceStrategy:
 @dataclass
 class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationDecomposition, Solution]):
     master_solver: Optimizer[pyo.ConcreteModel, object, Solution] | None = None
-    pricing_solver: Optimizer[Any, object, Solution] | None = None
     final_step_strategy: FinalStepStrategy | None = None
     tol: float = 1e-6
     max_steps: int = 10_000
@@ -74,24 +106,67 @@ class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationD
     def __post_init__(self) -> None:
         if self.master_solver is None:
             raise ValueError("master_solver is required")
-        if self.pricing_solver is None:
-            raise ValueError("pricing_solver is required")
 
     def _optimize(self, decomp: ColumnGenerationDecomposition) -> Solution:
-        state = ColumnGenState(
-            master=decomp.master,
-            pricing=decomp.pricing,
-            master_solver=self.master_solver,
-            pricing_solver=self.pricing_solver,
-            tol=self.tol,
+        state = ColumnGenState(master=decomp.master, pricing=decomp.pricing, tol=self.tol)
+        t0 = time.perf_counter()
+        partition_keys = list(state.pricing.partitions() or [])
+        partition_pos = 0
+        state.partition_keys = partition_keys
+        log = ColGenRunLog(
+            iterations=[
+                ColGenIterLog(
+                    it=0,
+                    num_columns=int(len(state.master.columns)),
+                    master_obj=None,
+                    pricing_partition=None,
+                    pricing_reduced_cost=None,
+                    added_column=None,
+                    duals=None,
+                )
+            ]
         )
-        plan = ClassicColumnGenPlan()
-        sol = MultiStageSolver(
-            plan=plan,
-            state=state,
-            max_steps=int(self.max_steps),
-            time_limit_s=self.time_limit_s,
-        ).run()
+
+        for _ in range(int(self.max_steps)):
+            if self.time_limit_s is not None and (time.perf_counter() - t0) >= float(self.time_limit_s):
+                break
+            master_solution = self.master_solver.optimize(state.master.model, log=False)
+            if master_solution.status not in (Status.OPTIMAL, Status.FEASIBLE):
+                raise RuntimeError(f"column_generation: master solve failed: {master_solution.status}")
+            state.last_master_solution = master_solution
+            state.last_duals = state.master.get_duals()
+
+            partition = None
+            if partition_keys:
+                partition = partition_keys[partition_pos % len(partition_keys)]
+            pricing_result = state.pricing.price(state.last_duals, partition)
+            state.last_pricing_result = pricing_result
+            added_column = None
+            if pricing_result.column is not None:
+                added_column = tuple(sorted(pricing_result.column.coverage.keys(), key=str))
+            log.iterations.append(
+                ColGenIterLog(
+                    it=int(state.it) + 1,
+                    num_columns=int(len(state.master.columns)),
+                    master_obj=float(pyo.value(state.master.model.obj)),
+                    pricing_partition=partition,
+                    pricing_reduced_cost=float(pricing_result.reduced_cost),
+                    added_column=added_column,
+                    duals=dict(state.last_duals),
+                )
+            )
+
+            if pricing_result.column is None or pricing_result.reduced_cost >= -state.tol:
+                break
+            state.master.add_column(pricing_result.column)
+            state.it += 1
+            if partition_keys:
+                partition_pos = (partition_pos + 1) % len(partition_keys)
+
         if self.final_step_strategy is None:
-            return sol
-        return self.final_step_strategy.run(state)
+            solution = NoFinalStepStrategy().run(state)
+        else:
+            solution = self.final_step_strategy.run(state)
+        solution.info = dict(solution.info)
+        solution.info["colgen_log"] = log
+        return solution

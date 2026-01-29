@@ -6,8 +6,6 @@ from abc import ABC, abstractmethod
 
 import pyomo.environ as pyo
 
-from qoco.core.solution import Solution
-
 RowKey = Hashable
 
 
@@ -34,7 +32,7 @@ class PricingResult:
     reduced_cost: float
 
 
-class PricingAdapter(ABC):
+class PricingStrategy(ABC):
     def partitions(self) -> Sequence[Any] | None:
         return None
 
@@ -42,10 +40,29 @@ class PricingAdapter(ABC):
         return []
 
     @abstractmethod
-    def build(self, duals: Dict[RowKey, float], partition: Any | None = None) -> Any: ...
+    def price(self, duals: Dict[RowKey, float], partition: Any | None = None) -> PricingResult: ...
+
+
+@dataclass(frozen=True)
+class NoOpPricingStrategy(PricingStrategy):
+    columns: list[Column]
+
+    def seed(self, duals: Dict[RowKey, float]) -> list[Column]:
+        return list(self.columns)
+
+    def price(self, duals: Dict[RowKey, float], partition: Any | None = None) -> PricingResult:
+        return PricingResult(column=None, reduced_cost=0.0)
+
+
+class MasterExtras(ABC):
+    @abstractmethod
+    def add_vars(self, model: pyo.ConcreteModel, *, lp_relaxation: bool) -> None: ...
 
     @abstractmethod
-    def extract(self, problem: Any, solution: Solution) -> PricingResult: ...
+    def build_constraints(self, model: pyo.ConcreteModel, columns: list[Column]) -> Dict[RowKey, pyo.Constraint]: ...
+
+    @abstractmethod
+    def objective_expr(self, model: pyo.ConcreteModel, columns: list[Column]) -> pyo.Expression | float: ...
 
 
 @dataclass
@@ -54,12 +71,14 @@ class SetPartitionMaster:
     columns: list[Column]
     lp_relaxation: bool = True
     exact_count: int | None = None
+    extras_builder: MasterExtras | None = None
 
     model: pyo.ConcreteModel = field(init=False)
     _row_constraints: Dict[RowKey, pyo.Constraint] = field(init=False, default_factory=dict)
     _count_constraint: pyo.Constraint | None = field(init=False, default=None)
     _row_coeffs: Dict[RowKey, list[float]] = field(init=False, default_factory=dict)
     _costs: list[float] = field(init=False, default_factory=list)
+    _extra_constraints: Dict[RowKey, pyo.Constraint] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.model = pyo.ConcreteModel()
@@ -73,9 +92,13 @@ class SetPartitionMaster:
         self._row_coeffs = {row: [] for row in self.rows}
         self._costs = []
 
+        if self.extras_builder is not None:
+            self.extras_builder.add_vars(self.model, lp_relaxation=self.lp_relaxation)
+
         for col in self.columns:
             self._add_column_internal(col, rebuild=False)
         self._rebuild_constraints()
+        self._rebuild_extras()
         self._update_objective()
 
     def add_column(self, column: Column) -> None:
@@ -89,6 +112,7 @@ class SetPartitionMaster:
             self._row_coeffs[row].append(column.coverage.get(row, 0.0))
         if rebuild:
             self._rebuild_constraints()
+            self._rebuild_extras()
             self._update_objective()
 
     def _rebuild_constraints(self) -> None:
@@ -106,8 +130,20 @@ class SetPartitionMaster:
             expr = sum(self.model.z[j] for j in self.model.z)
             self._count_constraint = self.model.row_cons.add(expr == self.exact_count)
 
+    def _rebuild_extras(self) -> None:
+        if self.extras_builder is None:
+            return
+        for con in self._extra_constraints.values():
+            con.deactivate()
+        if hasattr(self.model, "extra_cons"):
+            self.model.del_component(self.model.extra_cons)
+        self.model.extra_cons = pyo.ConstraintList()
+        self._extra_constraints = self.extras_builder.build_constraints(self.model, self.columns)
+
     def _update_objective(self) -> None:
         expr = sum(self._costs[j - 1] * self.model.z[j] for j in self.model.z)
+        if self.extras_builder is not None:
+            expr += self.extras_builder.objective_expr(self.model, self.columns)
         if hasattr(self.model, "obj"):
             self.model.obj.set_value(expr)
         else:
@@ -116,6 +152,9 @@ class SetPartitionMaster:
     def get_duals(self) -> Dict[RowKey, float]:
         duals: Dict[RowKey, float] = {}
         for row, con in self._row_constraints.items():
+            dv = self.model.dual.get(con, None)
+            duals[row] = dv if dv is not None else 0.0
+        for row, con in self._extra_constraints.items():
             dv = self.model.dual.get(con, None)
             duals[row] = dv if dv is not None else 0.0
         return duals
@@ -136,10 +175,11 @@ class SetPartitionMaster:
             columns=list(self.columns),
             lp_relaxation=False,
             exact_count=self.exact_count,
+            extras_builder=self.extras_builder,
         ).model
 
 
 @dataclass
 class ColumnGenerationDecomposition:
     master: SetPartitionMaster
-    pricing: PricingAdapter
+    pricing: PricingStrategy

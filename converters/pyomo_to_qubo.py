@@ -9,8 +9,8 @@ from pyomo.repn.standard_repn import generate_standard_repn
 
 from qoco.core.converter import Converter
 from qoco.core.qubo import QUBO, QuboMetadata, QuboVarEncoding
-from qoco.pyomo_utils.binary_expansion import BinaryExpansionConfig, ExpandedVar, expand_var
-from qoco.pyomo_utils.qubo_penalties import (
+from qoco.utils.pyomo.binary_expansion import BinaryExpansionConfig, ExpandedVar, expand_var
+from qoco.utils.pyomo.qubo_penalties import (
     PenaltyConfig,
     add_constraint_ge,
     add_constraint_le,

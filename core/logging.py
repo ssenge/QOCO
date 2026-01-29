@@ -131,6 +131,7 @@ def start_run(
     rid = run_id or new_run_id(prefix=kind)
     root = runs_dir or default_runs_dir()
     run_dir = Path(root) / rid
+    run_dir.mkdir(parents=True, exist_ok=True)
     configure_run_logging(run_dir)
     logger = JsonlLogger(run_dir)
     logger.write_meta(

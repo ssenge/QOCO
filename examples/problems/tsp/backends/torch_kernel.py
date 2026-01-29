@@ -32,9 +32,21 @@ def _batch_from_instances(insts: List[TSP], *, n_nodes: int, device: str) -> Ten
     for dist in dists:
         if dist.shape != (n_nodes, n_nodes):
             raise ValueError(f"Expected dist shape {(n_nodes, n_nodes)}, got {dist.shape}")
-    dist = torch.from_numpy(np.stack(dists)).to(device)
+    dist_np = np.stack(dists)
+    dist = torch.from_numpy(dist_np).to(device)
     n = torch.full((len(insts), 1), int(n_nodes), dtype=torch.long, device=device)
-    return TensorDict({"dist": dist, "n_nodes": n}, batch_size=[len(insts)]).to(device)
+    edge_masks = []
+    for inst, dist_arr in zip(insts, dists):
+        mask = getattr(inst, "edge_mask", None)
+        if mask is None:
+            mask = np.isfinite(dist_arr)
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != (n_nodes, n_nodes):
+            raise ValueError(f"Expected edge_mask shape {(n_nodes, n_nodes)}, got {mask.shape}")
+        np.fill_diagonal(mask, False)
+        edge_masks.append(mask)
+    edge_mask = torch.from_numpy(np.stack(edge_masks)).to(device)
+    return TensorDict({"dist": dist, "n_nodes": n, "edge_mask": edge_mask}, batch_size=[len(insts)]).to(device)
 
 
 @dataclass

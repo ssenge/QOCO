@@ -9,7 +9,7 @@ from qoco.converters.decomposition.benders import BendersDecomposition
 from qoco.core.optimizer import Optimizer
 from qoco.core.solution import Solution, Status
 from qoco.optimizers.decomposition.multistage import StagePlan, StageResult, StageTask
-from qoco.pyomo_utils.decomposition.benders import VarKey
+from qoco.utils.pyomo.decomposition.benders import VarKey
 
 
 @dataclass

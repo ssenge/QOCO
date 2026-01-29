@@ -8,7 +8,7 @@ from pyomo.core.expr.visitor import identify_variables
 
 from qoco.core.converter import Converter
 from qoco.converters.decomposition.lagrangian import VarKey
-from qoco.pyomo_utils.decomposition.rolling_horizon import RollingHorizonChunk
+from qoco.utils.pyomo.decomposition.rolling_horizon import RollingHorizonChunk
 
 
 def _var_key(v: pyo.Var) -> VarKey:

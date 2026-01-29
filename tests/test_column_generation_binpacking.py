@@ -6,8 +6,8 @@ import pyomo.environ as pyo
 from qoco.converters.decomposition.column_generation import (
     Column,
     ColumnGenerationDecomposition,
-    PricingAdapter,
     PricingResult,
+    PricingStrategy,
     SetPartitionMaster,
     set_pricing_objective,
 )
@@ -19,28 +19,23 @@ from qoco.optimizers.highs import HiGHSOptimizer
 
 
 @dataclass
-class BinPackingPricing(PricingAdapter):
+class BinPackingPricing(PricingStrategy):
     sizes: list[int]
     capacity: int
+    solver: HiGHSOptimizer
 
-    def build(self, duals: dict[int, float], partition=None) -> pyo.ConcreteModel:
-        # Pricing for BinPacking degenerates to a 0-1 knapsack.
+    def price(self, duals: dict[int, float], partition=None) -> PricingResult:
         knapsack = Knapsack(
             name="colgen_pricing_knapsack",
             weights=[s for s in self.sizes],
             capacity=self.capacity,
         )
         model = Knapsack.MILPConverter().convert(knapsack)
-        model.cover.deactivate()  # Deactivate (global) coverage constraint
+        model.cover.deactivate()
         set_pricing_objective(model, 1 - sum(duals[i] * model.x[0, i] for i in model.I))
-        return model
-
-    def extract(self, problem: pyo.ConcreteModel, solution: Solution) -> PricingResult:
-        reduced_cost = pyo.value(problem.obj_reduced.expr)
-        chosen = [
-            idx[1] if isinstance(idx, tuple) else idx
-            for idx in solution.selected_indices("x")
-        ]
+        solution = self.solver.optimize(model, log=False)
+        reduced_cost = pyo.value(model.obj_reduced.expr)
+        chosen = [idx[1] if isinstance(idx, tuple) else idx for idx in solution.selected_indices("x")]
         if not chosen:
             return PricingResult(column=None, reduced_cost=reduced_cost)
         col = Column(
@@ -69,8 +64,8 @@ def test_column_generation_binpacking() -> None:
     )
     rows = list(range(len(sizes)))
 
-    pricing = BinPackingPricing(sizes=sizes, capacity=capacity)
     pricing_solver = HiGHSOptimizer()
+    pricing = BinPackingPricing(sizes=sizes, capacity=capacity, solver=pricing_solver)
     initial_columns = pricing.seed({s: 0.0 for s in rows})
     master = SetPartitionMaster(
         rows=rows,
@@ -86,7 +81,6 @@ def test_column_generation_binpacking() -> None:
     optimizer = ColGenOptimizer(
         converter=IdentityConverter(),
         master_solver=master_solver,
-        pricing_solver=pricing_solver,
         final_step_strategy=final_strategy,
         max_steps=100,
     )

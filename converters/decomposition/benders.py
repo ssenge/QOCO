@@ -6,7 +6,7 @@ from typing import Tuple
 import pyomo.environ as pyo
 
 from qoco.core.converter import Converter
-from qoco.pyomo_utils.decomposition.benders import BendersMapping, classic_benders
+from qoco.utils.pyomo.decomposition.benders import BendersMapping, classic_benders
 
 
 @dataclass

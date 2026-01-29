@@ -65,10 +65,27 @@ class TSPTorchKernel(BaseTorchKernel):
         visited = td["visited"]
         step = td["step"]
         done = td["done"]
-        # Allow returning to start on final step.
-        mask = ~visited
-        mask = torch.where(step.unsqueeze(-1) >= self.n_nodes - 1, torch.zeros_like(mask), mask)
-        mask[:, 0] = step >= self.n_nodes - 1
+        cur = td["current"].long()
+        bs = int(td.batch_size[0])
+        device = td.device
+
+        if "edge_mask" in td.keys():
+            edge_mask = td["edge_mask"].bool()
+        else:
+            edge_mask = torch.isfinite(td["dist"]).bool()
+            edge_mask = edge_mask.clone()
+            edge_mask[..., torch.arange(self.n_nodes, device=device), torch.arange(self.n_nodes, device=device)] = False
+
+        batch_idx = torch.arange(bs, device=device)
+        allowed = edge_mask[batch_idx, cur]
+        mask = allowed & ~visited
+
+        final = step >= self.n_nodes - 1
+        if final.any():
+            only_start = torch.zeros_like(mask)
+            only_start[:, 0] = allowed[:, 0]
+            mask = torch.where(final.unsqueeze(-1), only_start, mask)
+
         mask = torch.where(done.unsqueeze(-1), torch.zeros_like(mask), mask)
         return mask
 
@@ -87,7 +104,7 @@ class TSPTorchKernel(BaseTorchKernel):
             for i in range(self.n_nodes):
                 a = int(seq[i].item())
                 bnode = int(seq[i + 1].item())
-                total += float(dist[a, bnode])
+                total += float(dist[b, a, bnode].item())
             out[b] = -total
         return out
 

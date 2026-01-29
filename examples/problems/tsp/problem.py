@@ -13,6 +13,7 @@ from qoco.core.problem import Problem
 class TSP(Problem):
     name: str
     dist: List[List[float]]
+    edge_mask: List[List[bool]] | None = None
 
     def validate(self) -> Tuple[bool, List[str]]:
         errors: List[str] = []
@@ -21,6 +22,9 @@ class TSP(Problem):
             errors.append("n must be >= 2")
         if any(len(row) != n for row in self.dist):
             errors.append("dist must be square")
+        if self.edge_mask is not None:
+            if len(self.edge_mask) != n or any(len(row) != n for row in self.edge_mask):
+                errors.append("edge_mask must be square with same shape as dist")
         return len(errors) == 0, errors
 
     def summary(self) -> str:
@@ -58,6 +62,15 @@ class TSP(Problem):
 
             model.mtz = pyo.Constraint(model.N, model.N, rule=mtz_rule)
             model.u[0].fix(0)
+
+            edge_mask = getattr(problem, "edge_mask", None)
+            if edge_mask is not None:
+                def _edge_rule(m, i, j):
+                    if not bool(edge_mask[i][j]):
+                        return m.x[i, j] == 0
+                    return pyo.Constraint.Skip
+
+                model.edge_mask = pyo.Constraint(model.N, model.N, rule=_edge_rule)
 
             model.obj = pyo.Objective(
                 expr=sum(dist[i][j] * model.x[i, j] for i in range(n) for j in range(n)),
