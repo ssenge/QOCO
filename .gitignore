@@ -7,3 +7,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/
+**/output/
+**/outputs/
+**/graveyard/
+**/no_commit/
+**/*playground/
+

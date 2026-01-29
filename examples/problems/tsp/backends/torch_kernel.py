@@ -53,13 +53,27 @@ def _batch_from_instances(insts: List[TSP], *, n_nodes: int, device: str) -> Ten
 class TSPTorchKernelBackend(EnvBackend):
     name: str = "tsp_torch_kernel"
     sampler: Sampler[TSP] = field(default_factory=RandomTSPSampler)
+    edge_topk: int | None = None
+    reachability_prune: bool = False
+    return_to_start_prune: bool = False
 
     kernel: TSPTorchKernel = field(init=False, repr=False)
     n_nodes: int = field(init=False)
 
     def __post_init__(self) -> None:
         self.n_nodes = _fixed_n_nodes(self.sampler)
-        self.kernel = TSPTorchKernel(n_nodes=int(self.n_nodes))
+        if self.edge_topk is None:
+            self.edge_topk = int(getattr(self.sampler, "edge_topk", 0) or 0)
+        if not self.reachability_prune:
+            self.reachability_prune = bool(getattr(self.sampler, "reachability_prune", False))
+        if not self.return_to_start_prune:
+            self.return_to_start_prune = bool(getattr(self.sampler, "return_to_start_prune", False))
+        self.kernel = TSPTorchKernel(
+            n_nodes=int(self.n_nodes),
+            edge_topk=self.edge_topk or None,
+            reachability_prune=self.reachability_prune,
+            return_to_start_prune=self.return_to_start_prune,
+        )
 
     def load_test_instances(self, path: Path, limit: int) -> List[TSP]:
         raise ValueError("TSPTorchKernelBackend.load_test_instances is not implemented.")
