@@ -14,12 +14,12 @@ from qoco.converters.qubo_to_qiskit_qp import QuboToQuadraticProgramConverter
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
-class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
+class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
     """Qiskit VQE on QUBOs.
 
     Note: Qiskit Optimization's `MinimumEigenOptimizer` does not accept estimator-based VQE
@@ -39,7 +39,7 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerR
     shots: int = 2048
     seed: Optional[int] = 0
 
-    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
+    def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         if self.seed is not None:
             np.random.seed(int(self.seed))
         n = int(qubo.n_vars)
@@ -77,13 +77,12 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerR
             names = [inv.get(i, str(i)) for i in range(n)]
         var_values = {names[i]: int(best_x[i]) for i in range(n)}
 
-        solution = InfoSolution(
+        solution = Solution(
             status=Status.FEASIBLE,
             objective=float(best_obj),
             var_values=var_values,
             var_arrays={"x": best_x},
             var_array_index={"x": list(names)},
-            info={"solver": "qiskit.VQE", "reps": int(self.reps), "vqe_eigenvalue": float(np.real(res.eigenvalue)), "ising_offset": float(offset)},
         )
         return solution, OptimizerRun(name=self.name)
 

@@ -9,7 +9,7 @@ import pyomo.environ as pyo
 import torch
 from tensordict import TensorDict
 
-from qoco.core.solution import InfoSolution, Status
+from qoco.core.solution import Solution, Status
 from qoco.optimizers.rl.training.milp.pyomo_eval import (
     CompiledNumericMILPKernel,
     apply_delta_numeric_inplace,
@@ -116,7 +116,7 @@ class GenericMILPAdapter(ProblemAdapter):
     optimal_time_s_fn: Callable[[Any], float]
     node_feat_dim: int = 4
     step_feat_dim: int = 2
-    decode_solution: Callable[[pyo.ConcreteModel, Status, float, dict[str, Any]], InfoSolution] | None = None
+    decode_solution: Callable[[pyo.ConcreteModel, Status, float, dict[str, Any]], Solution] | None = None
     advance_step: Callable[[str], bool] = lambda _name: True
 
     _episodes: dict[int, _EpisodeCache] = field(default_factory=dict, init=False, repr=False)
@@ -369,24 +369,16 @@ class GenericMILPAdapter(ProblemAdapter):
             return Status.FEASIBLE, float(ep.obj_value)
         return Status.INFEASIBLE, float("inf")
 
-    def to_solution(self, td: TensorDict) -> InfoSolution:
+    def to_solution(self, td: TensorDict) -> Solution:
         eid = int(td["episode_id"].reshape(-1)[0].item())
         ep = self._episodes[eid]
         status, cost = self.score_eval_batch(td)
-        info: dict[str, Any] = {
-            "episode_id": eid,
-            "steps": int(ep.step),
-            "n_vars": int(ep.kernel.n_vars),
-            "n_actions": int(ep.selector.n_actions),
-        }
         if self.decode_solution is not None:
-            return self.decode_solution(ep.model, status, float(cost), info)
+            return self.decode_solution(ep.model, status, float(cost), {})
 
         # default: report selected var names
         chosen = np.flatnonzero(ep.selected).tolist()
         names = [ep.idx_to_name[int(i)] for i in chosen]
         var_values = {str(n): 1.0 for n in names if n}
-        info["selected_var_idx"] = chosen
-        info["selected_var_names"] = names
-        return InfoSolution(status=status, objective=float(cost), var_values=var_values, info=info)
+        return Solution(status=status, objective=float(cost), var_values=var_values)
 

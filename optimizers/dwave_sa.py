@@ -10,7 +10,7 @@ from dwave.samplers import SimulatedAnnealingSampler
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.qubo_to_bqm import QuboToBQMConverter
 from qoco.converters.identity import IdentityConverter
 
@@ -23,7 +23,7 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
 
 
 @dataclass
-class DWaveSimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
+class DWaveSimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
     """Solve QUBOs using D-Wave's SimulatedAnnealingSampler (classical)."""
 
     name: str = "DWaveSA"
@@ -34,7 +34,7 @@ class DWaveSimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, InfoSoluti
     num_sweeps: int = 2_000
     seed: Optional[int] = None
 
-    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
+    def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         bqm = self.qubo_to_bqm.convert(qubo)
         sampler = SimulatedAnnealingSampler()
 
@@ -56,13 +56,12 @@ class DWaveSimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, InfoSoluti
         names = _names_by_index(dict(qubo.var_map), n)
         var_values = {names[i]: int(x[i]) for i in range(n)}
 
-        solution = InfoSolution(
+        solution = Solution(
             status=Status.FEASIBLE,
             objective=float(energy),
             var_values=var_values,
             var_arrays={"x": x},
             var_array_index={"x": list(names)},
-            info={"sampler": "dwave.samplers.SimulatedAnnealingSampler", "num_reads": int(self.num_reads), "num_sweeps": int(self.num_sweeps)},
         )
         return solution, OptimizerRun(name=self.name)
 

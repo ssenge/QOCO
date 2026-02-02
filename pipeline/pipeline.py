@@ -48,8 +48,6 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
 
         self.preproc(ctx)
         ctx["model"] = self.builder(ctx)
-        result = self.optimizer.optimize(ctx["model"])
-        ctx["result"] = result
-        ctx["solution"] = result.solution
+        ctx["result"] = self.optimizer.optimize(ctx["model"])
         self.postproc(ctx)
         return ctx

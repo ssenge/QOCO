@@ -13,7 +13,7 @@ import numpy as np
 
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
-from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
 from ..core.qubo import QUBO
 
@@ -29,7 +29,7 @@ class BnBNode:
 
 
 @dataclass
-class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
+class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
     """
     Branch-and-Bound for QUBO with exact/heuristic bounding.
     
@@ -51,14 +51,14 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, Optim
     seed: Optional[int] = None
     verbose: int = 100  # Print every N nodes
     
-    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
+    def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         Q = np.asarray(qubo.Q, dtype=float)
         offset = float(qubo.offset)
         var_map = dict(qubo.var_map)
         n = int(Q.shape[0])
         
         if n == 0:
-            solution = InfoSolution(status=Status.OPTIMAL, objective=offset, var_values={})
+            solution = Solution(status=Status.OPTIMAL, objective=offset, var_values={})
             return solution, OptimizerRun(name=self.name)
         
         rng = np.random.default_rng(self.seed)
@@ -161,18 +161,12 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, Optim
         else:
             status = Status.UNKNOWN
         
-        solution = InfoSolution(
+        solution = Solution(
             status=status,
             objective=best_ub if best_ub < float('inf') else float('inf'),
             var_values=var_values,
             var_arrays={"x": best_solution.copy()} if best_solution is not None else {},
             var_array_index={"x": list(idx_to_name)} if best_solution is not None else {},
-            info={
-                "nodes_explored": nodes_explored,
-                "nodes_pruned": nodes_pruned,
-                "gap": gap,
-                "open_nodes": len(open_nodes),
-            }
         )
         return solution, OptimizerRun(name=self.name)
     

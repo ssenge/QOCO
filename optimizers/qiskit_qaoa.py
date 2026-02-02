@@ -13,7 +13,7 @@ from qoco.converters.qubo_to_qiskit_qp import QuboToQuadraticProgramConverter
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
 
 
@@ -32,7 +32,7 @@ def _bitstring_to_x(bitstring: str, n: int) -> np.ndarray:
 
 
 @dataclass
-class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
+class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
     """Solve QUBOs using Qiskit's QAOA (simulated via Aer SamplerV2 by default)."""
 
     name: str = "QiskitQAOA"
@@ -45,7 +45,7 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, Optimizer
     transpiler: Any = field(default_factory=lambda: generate_preset_pass_manager(optimization_level=1, basis_gates=["rz", "sx", "x", "cx"]))
     seed: Optional[int] = 0
 
-    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
+    def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         qp = self.qubo_to_qp.convert(qubo)
         op, offset = qp.to_ising()
 
@@ -73,13 +73,12 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, Optimizer
         names = _names_by_index(dict(qubo.var_map), n)
         var_values = {names[i]: int(x[i]) for i in range(n)}
 
-        solution = InfoSolution(
+        solution = Solution(
             status=Status.FEASIBLE,
             objective=float(obj),
             var_values=var_values,
             var_arrays={"x": x},
             var_array_index={"x": list(names)},
-            info={"solver": "qiskit.QAOA", "reps": int(self.reps)},
         )
         return solution, OptimizerRun(name=self.name)
 

@@ -9,7 +9,7 @@ import torch
 from tensordict import TensorDict
 
 from qoco.core.sampler import Sampler
-from qoco.core.solution import InfoSolution, Status
+from qoco.core.solution import Solution, Status
 from qoco.examples.problems.tsp.problem import TSP
 from qoco.examples.problems.tsp.sampler import RandomTSPSampler
 from qoco.examples.problems.tsp.torch_kernel import TSPTorchKernel
@@ -135,11 +135,9 @@ class TSPTorchKernelBackend(EnvBackend):
         r = float(reward.reshape(-1)[0].item())
         return Status.FEASIBLE, float(-r)
 
-    def to_solution(self, batch: TensorDict) -> InfoSolution:
+    def to_solution(self, batch: TensorDict) -> Solution:
         status, obj = self.score_eval_batch(batch)
-        tour = batch["tour"][0].detach().cpu().numpy().tolist()
-        info = {"tour": tour}
-        return InfoSolution(status=status, objective=float(obj), var_values={}, info=info)
+        return Solution(status=status, objective=float(obj), var_values={})
 
 
 @dataclass

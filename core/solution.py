@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from enum import Enum, auto
-from typing import Any, Dict, Generic, Iterable, Optional, TypeVar
+from typing import Any, Dict, Generic, Iterable, TypeVar
 import ast
 from pydantic import TypeAdapter
 
@@ -79,7 +79,6 @@ class Solution:
         status: Solver termination status
         objective: Objective function value
         var_values: Variable name -> value mapping
-        known_optimal_value: Optional a-priori optimal value (if known)
     """
 
     status: Status
@@ -91,7 +90,6 @@ class Solution:
     # Optional index mapping for non-dense variable arrays:
     # var_name -> list of Pyomo indices in the array's flattened order (or nested order by convention).
     var_array_index: Dict[str, Any] = field(default_factory=dict)
-    known_optimal_value: Optional[float] = None
 
     @property
     def feasible(self) -> bool:
@@ -146,7 +144,4 @@ class Solution:
         return out
 
 
-@pydantic_dataclass
-class InfoSolution(Solution):
-    info: Dict[str, Any] = field(default_factory=dict)
 

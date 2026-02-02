@@ -8,7 +8,7 @@ from typing import Any, Callable, List, Mapping
 import pyomo.environ as pyo
 import torch
 
-from qoco.core.solution import InfoSolution, Status
+from qoco.core.solution import Solution, Status
 from qoco.optimizers.rl.shared.backend import EnvBackend
 from qoco.optimizers.rl.training.milp.generic import GenericMILPAdapter, GenericMILPConfig
 from qoco.optimizers.rl.training.milp.selectors import AllBinarySelector, CandidateSelector, PaddedSelector, SelectorFactory
@@ -27,7 +27,7 @@ class GenericMILPBackend(EnvBackend):
     n_nodes: int | None = None
     selector: CandidateSelector | None = None
     selector_factory: SelectorFactory | None = None
-    decode_solution: Callable[[pyo.ConcreteModel, Status, float, dict[str, Any]], InfoSolution] | None = None
+    decode_solution: Callable[[pyo.ConcreteModel, Status, float, dict[str, Any]], Solution] | None = None
 
     # Optional: provide a sampler to derive sample_train_instances, config.max_steps, n_nodes, bootstrap.
     sampler: Any | None = field(default=None, repr=False)

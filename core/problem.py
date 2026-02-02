@@ -3,7 +3,7 @@ Abstract base class for optimization problems.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, List, Tuple, TypeVar
 
 from qoco.core.solution import ProblemSummary
@@ -16,6 +16,7 @@ class Problem(ABC, Generic[SummaryT]):
     """Abstract base class for optimization problems."""
 
     name: str
+    known_optimal_value: float | None = field(default=None, init=False)
 
     @abstractmethod
     def validate(self) -> Tuple[bool, List[str]]:
