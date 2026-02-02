@@ -13,7 +13,7 @@ from qoco.converters.decomposition.column_generation import (
 )
 from qoco.converters.identity import IdentityConverter
 from qoco.examples.problems.binpacking.problem import BinPacking, Knapsack
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import Status
 from qoco.optimizers.decomposition.column_generation import ColGenOptimizer, IntegerMasterStrategy
 from qoco.optimizers.highs import HiGHSOptimizer
 
@@ -33,7 +33,7 @@ class BinPackingPricing(PricingStrategy):
         model = Knapsack.MILPConverter().convert(knapsack)
         model.cover.deactivate()
         set_pricing_objective(model, 1 - sum(duals[i] * model.x[0, i] for i in model.I))
-        solution = self.solver.optimize(model, log=False)
+        solution = self.solver.optimize(model).solution
         reduced_cost = pyo.value(model.obj_reduced.expr)
         chosen = [idx[1] if isinstance(idx, tuple) else idx for idx in solution.selected_indices("x")]
         if not chosen:
@@ -84,12 +84,12 @@ def test_column_generation_binpacking() -> None:
         final_step_strategy=final_strategy,
         max_steps=100,
     )
-    solution = optimizer.optimize(decomp, log=False)
+    solution = optimizer.optimize(decomp).solution
 
     oracle_converter = BinPacking.MILPConverter()
     oracle_model = oracle_converter.convert(problem)
     oracle_solver = HiGHSOptimizer()
-    oracle_solution = oracle_solver.optimize(oracle_model, log=False)
+    oracle_solution = oracle_solver.optimize(oracle_model).solution
 
     assert solution.status in (Status.OPTIMAL, Status.FEASIBLE)
     assert oracle_solution.status == Status.OPTIMAL

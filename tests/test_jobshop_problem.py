@@ -26,7 +26,7 @@ def _jobshop_instance() -> JobShopScheduling:
 def test_jobshop_highs() -> None:
     problem = _jobshop_instance()
     solver = HiGHSOptimizer(converter=JobShopScheduling.MILPConverter())
-    sol = solver.optimize(problem, log=False)
+    sol = solver.optimize(problem).solution
     assert sol.status in (Status.OPTIMAL, Status.FEASIBLE)
     assert abs(sol.objective - 2.0) < 1e-6
 
@@ -127,7 +127,7 @@ def test_jobshop_relex_rl4co() -> None:
             checkpoint_path=rl4co_ckpt,
             runner_cls=RL4CORunner,
         )
-        sol_rl4co = opt_rl4co.optimize(problem, log=False)
+        sol_rl4co = opt_rl4co.optimize(problem).solution
         assert sol_rl4co.status in (Status.FEASIBLE, Status.INFEASIBLE)
 
         opt_relex = MLPolicyOptimizer(
@@ -135,5 +135,5 @@ def test_jobshop_relex_rl4co() -> None:
             checkpoint_path=relex_ckpt,
             runner_cls=RelexRunner,
         )
-        sol_relex = opt_relex.optimize(problem, log=False)
+        sol_relex = opt_relex.optimize(problem).solution
         assert sol_relex.status in (Status.FEASIBLE, Status.INFEASIBLE)

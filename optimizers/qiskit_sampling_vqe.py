@@ -13,15 +13,16 @@ from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import Solution
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary
 from qoco.converters.identity import IdentityConverter
 from qoco.optimizers.qiskit_min_eigen import QiskitMinimumEigensolverOptimizer
 
 
 @dataclass
-class QiskitSamplingVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
+class QiskitSamplingVQEOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
     """Qiskit SamplingVQE on QUBOs (via MinimumEigenOptimizer)."""
 
+    name: str = "QiskitSamplingVQE"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
 
     reps: int = 1
@@ -30,7 +31,7 @@ class QiskitSamplingVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     pass_manager: Any = field(default_factory=lambda: generate_preset_pass_manager(optimization_level=1, basis_gates=["rz", "sx", "x", "cx"]))
     seed: Optional[int] = 0
 
-    def _optimize(self, qubo: QUBO) -> Solution:
+    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
         n = int(qubo.n_vars)
         if self.seed is not None:
             np.random.seed(int(self.seed))

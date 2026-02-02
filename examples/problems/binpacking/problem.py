@@ -6,10 +6,11 @@ import pyomo.environ as pyo
 
 from qoco.core.converter import Converter
 from qoco.core.problem import Problem
+from qoco.core.solution import ProblemSummary
 
 
 @dataclass
-class BinPacking(Problem):
+class BinPacking(Problem[ProblemSummary]):
     name: str
     weights: list[float]
     capacity: float
@@ -29,16 +30,8 @@ class BinPacking(Problem):
             errors.append("some weights exceed capacity (instance infeasible)")
         return len(errors) == 0, errors
 
-    def summary(self) -> str:
-        valid, errors = self.validate()
-        status = "✓ Valid" if valid else f"✗ {len(errors)} errors"
-        return (
-            f"BinPacking('{self.name}')\n"
-            f"  n={len(self.weights)} items\n"
-            f"  m={self.m} bins (upper bound)\n"
-            f"  capacity={self.capacity:.3g}\n"
-            f"  Status: {status}"
-        )
+    def summary(self) -> ProblemSummary:
+        return ProblemSummary()
 
     class MILPConverter(Converter["BinPacking", pyo.ConcreteModel]):
         def convert(self, problem: "BinPacking") -> pyo.ConcreteModel:

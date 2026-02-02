@@ -7,7 +7,7 @@ import pyomo.environ as pyo
 
 from qoco.converters.decomposition.benders import BendersDecomposition
 from qoco.core.optimizer import Optimizer
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.optimizers.decomposition.multistage import StagePlan, StageResult, StageTask
 from qoco.utils.pyomo.decomposition.benders import VarKey
 
@@ -15,8 +15,8 @@ from qoco.utils.pyomo.decomposition.benders import VarKey
 @dataclass
 class BendersState:
     decomp: BendersDecomposition
-    master_solver: Optimizer[pyo.ConcreteModel, object, Solution]
-    sub_solver: Optimizer[pyo.ConcreteModel, object, Solution]
+    master_solver: Optimizer[pyo.ConcreteModel, object, InfoSolution, OptimizerRun, ProblemSummary]
+    sub_solver: Optimizer[pyo.ConcreteModel, object, InfoSolution, OptimizerRun, ProblemSummary]
     tol: float = 1e-6
 
     phase: str = "master"  # master | sub
@@ -110,9 +110,9 @@ class ClassicBendersPlan(StagePlan[BendersState, pyo.ConcreteModel, str]):
             return False
         return bool(abs(state.theta_value() - float(state.last_sub_obj)) <= float(state.tol))
 
-    def to_solution(self, state: BendersState) -> Solution:
+    def to_solution(self, state: BendersState) -> InfoSolution:
         if state.last_master_obj is None or state.last_sub_obj is None:
-            return Solution(status=Status.INFEASIBLE, objective=float("inf"), var_values={}, info={"iters": int(state.it)})
+            return InfoSolution(status=Status.INFEASIBLE, objective=float("inf"), var_values={}, info={"iters": int(state.it)})
         total = float(state.last_master_obj - state.theta_value() + float(state.last_sub_obj))
-        return Solution(status=Status.FEASIBLE, objective=total, var_values={}, info={"iters": int(state.it)})
+        return InfoSolution(status=Status.FEASIBLE, objective=total, var_values={}, info={"iters": int(state.it)})
 

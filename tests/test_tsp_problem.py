@@ -27,7 +27,7 @@ def _tsp_instance() -> TSP:
 def test_tsp_highs() -> None:
     problem = _tsp_instance()
     solver = HiGHSOptimizer(converter=TSP.MILPConverter())
-    sol = solver.optimize(problem, log=False)
+    sol = solver.optimize(problem).solution
     assert sol.status in (Status.OPTIMAL, Status.FEASIBLE)
     assert abs(sol.objective - 6.0) < 1e-6
 
@@ -130,7 +130,7 @@ def test_tsp_relex_rl4co() -> None:
             checkpoint_path=rl4co_ckpt,
             runner_cls=RL4CORunner,
         )
-        sol_rl4co = opt_rl4co.optimize(problem, log=False)
+        sol_rl4co = opt_rl4co.optimize(problem).solution
         assert sol_rl4co.status in (Status.FEASIBLE, Status.INFEASIBLE)
 
         opt_relex = MLPolicyOptimizer(
@@ -138,5 +138,5 @@ def test_tsp_relex_rl4co() -> None:
             checkpoint_path=relex_ckpt,
             runner_cls=RelexRunner,
         )
-        sol_relex = opt_relex.optimize(problem, log=False)
+        sol_relex = opt_relex.optimize(problem).solution
         assert sol_relex.status in (Status.FEASIBLE, Status.INFEASIBLE)

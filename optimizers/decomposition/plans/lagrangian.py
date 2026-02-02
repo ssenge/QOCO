@@ -7,7 +7,7 @@ import pyomo.environ as pyo
 
 from qoco.converters.decomposition.lagrangian import LagrangianSplit, VarKey
 from qoco.core.optimizer import Optimizer
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.optimizers.decomposition.multistage import StagePlan, StageResult, StageTask
 
 
@@ -24,7 +24,7 @@ def _active_objective_value(model: pyo.ConcreteModel) -> float:
 @dataclass
 class LagrangianState:
     split: LagrangianSplit
-    sub_solver: Optimizer[pyo.ConcreteModel, object, Solution]
+    sub_solver: Optimizer[pyo.ConcreteModel, object, InfoSolution, OptimizerRun, ProblemSummary]
     step_size: float
     max_iters: int
 
@@ -83,10 +83,10 @@ class ClassicLagrangianPlan(StagePlan[LagrangianState, pyo.ConcreteModel, int]):
     def converged(self, state: LagrangianState) -> bool:
         return bool(int(state.it) >= int(state.max_iters))
 
-    def to_solution(self, state: LagrangianState) -> Solution:
+    def to_solution(self, state: LagrangianState) -> InfoSolution:
         vv = {f"{k.comp}{'' if k.idx is None else str(k.idx)}": float(v) for k, v in (state.x or {}).items()}
         dual = state.best_dual_bound if state.best_dual_bound is not None else _dual_bound(state)
-        return Solution(
+        return InfoSolution(
             status=Status.FEASIBLE,
             objective=float(dual),
             var_values=vv,

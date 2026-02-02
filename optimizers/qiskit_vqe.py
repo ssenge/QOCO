@@ -14,12 +14,12 @@ from qoco.converters.qubo_to_qiskit_qp import QuboToQuadraticProgramConverter
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
-class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
+class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
     """Qiskit VQE on QUBOs.
 
     Note: Qiskit Optimization's `MinimumEigenOptimizer` does not accept estimator-based VQE
@@ -27,6 +27,7 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     circuit to extract a bitstring solution.
     """
 
+    name: str = "QiskitVQE"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Any = field(default_factory=QuboToQuadraticProgramConverter)
 
@@ -38,7 +39,7 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     shots: int = 2048
     seed: Optional[int] = 0
 
-    def _optimize(self, qubo: QUBO) -> Solution:
+    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
         if self.seed is not None:
             np.random.seed(int(self.seed))
         n = int(qubo.n_vars)
@@ -76,7 +77,7 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
             names = [inv.get(i, str(i)) for i in range(n)]
         var_values = {names[i]: int(best_x[i]) for i in range(n)}
 
-        return Solution(
+        solution = InfoSolution(
             status=Status.FEASIBLE,
             objective=float(best_obj),
             var_values=var_values,
@@ -84,4 +85,5 @@ class QiskitVQEOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
             var_array_index={"x": list(names)},
             info={"solver": "qiskit.VQE", "reps": int(self.reps), "vqe_eigenvalue": float(np.real(res.eigenvalue)), "ising_offset": float(offset)},
         )
+        return solution, OptimizerRun(name=self.name)
 

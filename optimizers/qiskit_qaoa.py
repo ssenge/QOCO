@@ -13,7 +13,7 @@ from qoco.converters.qubo_to_qiskit_qp import QuboToQuadraticProgramConverter
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.converters.identity import IdentityConverter
 
 
@@ -32,9 +32,10 @@ def _bitstring_to_x(bitstring: str, n: int) -> np.ndarray:
 
 
 @dataclass
-class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
+class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
     """Solve QUBOs using Qiskit's QAOA (simulated via Aer SamplerV2 by default)."""
 
+    name: str = "QiskitQAOA"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Converter[QUBO, Any] = field(default_factory=QuboToQuadraticProgramConverter)
 
@@ -44,7 +45,7 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     transpiler: Any = field(default_factory=lambda: generate_preset_pass_manager(optimization_level=1, basis_gates=["rz", "sx", "x", "cx"]))
     seed: Optional[int] = 0
 
-    def _optimize(self, qubo: QUBO) -> Solution:
+    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
         qp = self.qubo_to_qp.convert(qubo)
         op, offset = qp.to_ising()
 
@@ -72,7 +73,7 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
         names = _names_by_index(dict(qubo.var_map), n)
         var_values = {names[i]: int(x[i]) for i in range(n)}
 
-        return Solution(
+        solution = InfoSolution(
             status=Status.FEASIBLE,
             objective=float(obj),
             var_values=var_values,
@@ -80,4 +81,5 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
             var_array_index={"x": list(names)},
             info={"solver": "qiskit.QAOA", "reps": int(self.reps)},
         )
+        return solution, OptimizerRun(name=self.name)
 

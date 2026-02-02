@@ -8,7 +8,7 @@ from typing import Generic
 from qoco.core.problem import Problem
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 
 
 class NullConverter(Converter[Problem, None]):
@@ -19,8 +19,9 @@ class NullConverter(Converter[Problem, None]):
 
 
 @dataclass
-class ConstOptimizer(Generic[P], Optimizer[P, None, Solution]):
+class ConstOptimizer(Generic[P], Optimizer[P, None, Solution, OptimizerRun, ProblemSummary]):
     """Dummy optimizer that always returns a constant value."""
+    name: str = "Const"
     converter: Converter[P, None] = None
     value: float = 0.0
     
@@ -28,9 +29,11 @@ class ConstOptimizer(Generic[P], Optimizer[P, None, Solution]):
         if self.converter is None:
             self.converter = NullConverter()
     
-    def _optimize(self, converted: None) -> Solution:
-        return Solution(
+    def _optimize(self, converted: None) -> tuple[Solution, OptimizerRun]:
+        solution = Solution(
             status=Status.OPTIMAL,
             objective=self.value,
             var_values={},
         )
+        run = OptimizerRun(name=self.name)
+        return solution, run

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Generic, Optional, Protocol, Sequence, TypeVar
 
 from qoco.core.optimizer import Optimizer
-from qoco.core.solution import Solution
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution
 
 
 StateT = TypeVar("StateT")
@@ -17,7 +17,7 @@ TagT = TypeVar("TagT")
 class StageTask(Generic[ProblemT, TagT]):
     tag: TagT
     problem: ProblemT
-    solver: Optimizer[ProblemT, object, Solution]
+    solver: Optimizer[ProblemT, object, Solution, OptimizerRun, ProblemSummary]
 
 
 @dataclass(frozen=True)
@@ -54,8 +54,8 @@ class MultiStageSolver(Generic[StateT, ProblemT, TagT]):
             if task is None:
                 break
 
-            sol = task.solver.optimize(task.problem, log=False)
-            st = self.plan.apply(st, StageResult(task=task, solution=sol))
+            res = task.solver.optimize(task.problem, log=False)
+            st = self.plan.apply(st, StageResult(task=task, solution=res.solution))
 
         self.state = st
         return self.plan.to_solution(st)

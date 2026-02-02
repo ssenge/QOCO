@@ -9,7 +9,7 @@ from qoco.converters.qubo_to_qiskit_qp import QuboToQuadraticProgramConverter
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.converters.identity import IdentityConverter
 
 
@@ -20,7 +20,7 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
     return [inv.get(i, str(i)) for i in range(int(n))]
 
 
-def _result_to_solution(*, qubo: QUBO, x: np.ndarray, fval: float, info: dict[str, Any]) -> Solution:
+def _result_to_solution(*, qubo: QUBO, x: np.ndarray, fval: float, info: dict[str, Any]) -> InfoSolution:
     n = int(qubo.n_vars)
     xx = np.asarray(x, dtype=float).reshape(-1)
     if xx.shape[0] != n:
@@ -28,7 +28,7 @@ def _result_to_solution(*, qubo: QUBO, x: np.ndarray, fval: float, info: dict[st
     xi = np.asarray(np.rint(xx), dtype=int)
     names = _names_by_index(dict(qubo.var_map), n)
     var_values = {names[i]: int(xi[i]) for i in range(n)}
-    return Solution(
+    return InfoSolution(
         status=Status.FEASIBLE,
         objective=float(fval),
         var_values=var_values,
@@ -39,14 +39,15 @@ def _result_to_solution(*, qubo: QUBO, x: np.ndarray, fval: float, info: dict[st
 
 
 @dataclass
-class QiskitMinimumEigensolverOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
+class QiskitMinimumEigensolverOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
     """Generic wrapper for Qiskit Optimization's `MinimumEigenOptimizer` on QUBOs."""
 
+    name: str = "QiskitMinimumEigen"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Any = field(default_factory=QuboToQuadraticProgramConverter)
     minimum_eigensolver: Any = None
 
-    def _optimize(self, qubo: QUBO) -> Solution:
+    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
         if self.minimum_eigensolver is None:
             raise ValueError("minimum_eigensolver must be provided")
 
@@ -55,10 +56,11 @@ class QiskitMinimumEigensolverOptimizer(Generic[P], Optimizer[P, QUBO, Solution]
         qp = self.qubo_to_qp.convert(qubo)
         opt = MinimumEigenOptimizer(self.minimum_eigensolver)
         res = opt.solve(qp)
-        return _result_to_solution(
+        solution = _result_to_solution(
             qubo=qubo,
             x=np.asarray(res.x, dtype=float),
             fval=float(res.fval),
             info={"solver": "qiskit.MinimumEigenOptimizer", "minimum_eigensolver": type(self.minimum_eigensolver).__name__},
         )
+        return solution, OptimizerRun(name=self.name)
 

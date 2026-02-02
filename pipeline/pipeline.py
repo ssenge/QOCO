@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Generic, TypeVar
 
 from qoco.core.optimizer import Optimizer
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution
 from qoco.preproc import Collapser, CollapseMapping, Reducer
 
 from .context import PipelineContext
@@ -21,7 +22,7 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
     collapsers: list[Collapser[P, Map]]
     preproc: Callable[[PipelineContext], None]
     builder: Callable[[PipelineContext], M]
-    optimizer: Optimizer[M, M, R]
+    optimizer: Optimizer[M, M, Solution, OptimizerRun, ProblemSummary]
     postproc: Callable[[PipelineContext], None]
 
     def _load(self, ctx: PipelineContext) -> None:
@@ -47,6 +48,8 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
 
         self.preproc(ctx)
         ctx["model"] = self.builder(ctx)
-        ctx["solution"] = self.optimizer.optimize(ctx["model"])
+        result = self.optimizer.optimize(ctx["model"])
+        ctx["result"] = result
+        ctx["solution"] = result.solution
         self.postproc(ctx)
         return ctx

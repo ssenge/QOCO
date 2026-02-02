@@ -13,7 +13,7 @@ import numpy as np
 
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.converters.identity import IdentityConverter
 from ..core.qubo import QUBO
 
@@ -29,7 +29,7 @@ class BnBNode:
 
 
 @dataclass
-class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
+class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, InfoSolution, OptimizerRun, ProblemSummary]):
     """
     Branch-and-Bound for QUBO with exact/heuristic bounding.
     
@@ -43,6 +43,7 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
         seed: Random seed
         verbose: Print progress every N nodes (0 = silent)
     """
+    name: str = "BranchAndBound"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     max_nodes: int = 10000
     max_vars_exact: int = 20  # 2^20 = ~1M combinations (increased default)
@@ -50,14 +51,15 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     seed: Optional[int] = None
     verbose: int = 100  # Print every N nodes
     
-    def _optimize(self, qubo: QUBO) -> Solution:
+    def _optimize(self, qubo: QUBO) -> tuple[InfoSolution, OptimizerRun]:
         Q = np.asarray(qubo.Q, dtype=float)
         offset = float(qubo.offset)
         var_map = dict(qubo.var_map)
         n = int(Q.shape[0])
         
         if n == 0:
-            return Solution(status=Status.OPTIMAL, objective=offset, var_values={})
+            solution = InfoSolution(status=Status.OPTIMAL, objective=offset, var_values={})
+            return solution, OptimizerRun(name=self.name)
         
         rng = np.random.default_rng(self.seed)
         
@@ -159,7 +161,7 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
         else:
             status = Status.UNKNOWN
         
-        return Solution(
+        solution = InfoSolution(
             status=status,
             objective=best_ub if best_ub < float('inf') else float('inf'),
             var_values=var_values,
@@ -172,6 +174,7 @@ class BranchAndBoundOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
                 "open_nodes": len(open_nodes),
             }
         )
+        return solution, OptimizerRun(name=self.name)
     
     def _reduce_qubo(self, Q: np.ndarray, offset: float, fixed_vars: dict[int, int]) -> tuple[np.ndarray, float, list[int], float]:
         """

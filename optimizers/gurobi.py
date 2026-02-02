@@ -12,12 +12,12 @@ from pyomo.opt import TerminationCondition
 
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
-class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
+class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, InfoSolution, OptimizerRun, ProblemSummary]):
     """
     Gurobi MILP/LP solver via Pyomo.
 
@@ -27,13 +27,14 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
         mip_gap: Relative MIP gap tolerance (e.g., 0.01 = 1%)
         verbose: Print solver output
     """
+    name: str = "Gurobi"
     converter: Converter[P, pyo.ConcreteModel] = field(default_factory=IdentityConverter)
     time_limit: Optional[float] = None
     mip_gap: Optional[float] = None
     verbose: bool = False
     capture_duals: bool = False
 
-    def _optimize(self, model: pyo.ConcreteModel) -> Solution:
+    def _optimize(self, model: pyo.ConcreteModel) -> tuple[InfoSolution, OptimizerRun]:
         if self.capture_duals and not hasattr(model, "dual"):
             model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
 
@@ -87,9 +88,10 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
             if duals:
                 info["duals"] = duals
 
-        return Solution(
+        solution = InfoSolution(
             status=status,
             objective=obj_val,
             var_values=var_values,
             info=info,
         )
+        return solution, OptimizerRun(name=self.name)

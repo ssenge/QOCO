@@ -6,7 +6,7 @@ from typing import Dict, List, Mapping
 import numpy as np
 
 from qoco.core.qubo import QUBO, QuboPartition
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.core.optimizer import Optimizer
 from qoco.optimizers.decomposition.multistage import StageTask
 from qoco.optimizers.decomposition.sequential import SequentialSolver
@@ -32,12 +32,12 @@ class SequentialQuboPartitionSolver:
     This is intentionally simple: it ignores cross-block couplings, so it is a heuristic.
     """
 
-    sub_solver: Optimizer[QUBO, QUBO, Solution]
+    sub_solver: Optimizer[QUBO, QUBO, InfoSolution, OptimizerRun, ProblemSummary]
 
-    def solve(self, *, qubo: QUBO, partition: QuboPartition) -> Solution:
+    def solve(self, *, qubo: QUBO, partition: QuboPartition) -> InfoSolution:
         n = int(qubo.n_vars)
         if n == 0:
-            return Solution(status=Status.OPTIMAL, objective=float(qubo.offset), var_values={}, var_arrays={"x": np.zeros((0,), dtype=int)})
+            return InfoSolution(status=Status.OPTIMAL, objective=float(qubo.offset), var_values={}, var_arrays={"x": np.zeros((0,), dtype=int)})
 
         tasks = []
         for k, sub in enumerate(partition.sub_qubos):
@@ -56,7 +56,7 @@ class SequentialQuboPartitionSolver:
             obj = evaluate_qubo(qubo, x)
             names = _names_by_index(qubo.var_map, n)
             var_values = {names[i]: int(x[i]) for i in range(n)}
-            return Solution(
+            return InfoSolution(
                 status=Status.FEASIBLE,
                 objective=float(obj),
                 var_values=var_values,

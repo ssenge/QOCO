@@ -8,13 +8,13 @@ import numpy as np
 
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
 from ..core.qubo import QUBO
 
 
 @dataclass
-class SimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
+class SimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
     """
     Simulated Annealing for QUBO matrices.
     
@@ -28,6 +28,7 @@ class SimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
         max_iter: Maximum iterations
         seed: Random seed for reproducibility
     """
+    name: str = "SimulatedAnnealing"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     T_initial: float = 100.0
     T_final: float = 0.01
@@ -35,7 +36,7 @@ class SimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
     max_iter: int = 10000
     seed: Optional[int] = None
     
-    def _optimize(self, qubo: QUBO) -> Solution:
+    def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         Q = np.asarray(qubo.Q, dtype=float)
         offset = float(qubo.offset)
         var_map = dict(qubo.var_map)
@@ -89,13 +90,14 @@ class SimulatedAnnealingOptimizer(Generic[P], Optimizer[P, QUBO, Solution]):
                 idx_to_name[k] = str(k)
         var_values = {idx_to_name[k]: int(best_x[k]) for k in range(n)}
         
-        return Solution(
+        solution = Solution(
             status=Status.FEASIBLE,  # SA doesn't prove optimality
             objective=best_cost,
             var_values=var_values,
             var_arrays={"x": best_x.copy()},
             var_array_index={"x": list(idx_to_name)},
         )
+        return solution, OptimizerRun(name=self.name)
     
     def _compute_cost(self, Q: np.ndarray, x: np.ndarray, offset: float) -> float:
         """Compute x^T Q x + offset."""

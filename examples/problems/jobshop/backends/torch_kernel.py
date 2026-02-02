@@ -9,7 +9,7 @@ import torch
 from tensordict import TensorDict
 
 from qoco.core.sampler import Sampler
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, Status
 from qoco.examples.problems.jobshop.problem import JobShopScheduling
 from qoco.examples.problems.jobshop.sampler import RandomJobShopSampler
 from qoco.examples.problems.jobshop.torch_kernel import JobShopTorchKernel
@@ -159,10 +159,10 @@ class JobShopTorchKernelBackend(EnvBackend):
         r = float(reward.reshape(-1)[0].item())
         return Status.FEASIBLE, float(-r)
 
-    def to_solution(self, batch: TensorDict) -> Solution:
+    def to_solution(self, batch: TensorDict) -> InfoSolution:
         status, obj = self.score_eval_batch(batch)
         info = {"makespan": float(obj)}
-        return Solution(status=status, objective=float(obj), var_values={}, info=info)
+        return InfoSolution(status=status, objective=float(obj), var_values={}, info=info)
 
 
 @dataclass

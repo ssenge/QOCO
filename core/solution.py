@@ -3,9 +3,17 @@ Solution class for optimization results.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from enum import Enum, auto
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Generic, Iterable, Optional, TypeVar
 import ast
+from pydantic import TypeAdapter
+
+try:
+    from pydantic.dataclasses import dataclass as pydantic_dataclass
+except Exception:  # pragma: no cover - fallback when pydantic is unavailable
+    pydantic_dataclass = dataclass
 
 
 class Status(Enum):
@@ -17,7 +25,52 @@ class Status(Enum):
     UNKNOWN = auto()  # Solver didn't find anything / error
 
 
-@dataclass
+SummaryT = TypeVar("SummaryT", bound="ProblemSummary")
+SolutionT = TypeVar("SolutionT", bound="Solution")
+RunT = TypeVar("RunT", bound="OptimizerRun")
+
+
+@pydantic_dataclass
+class ProblemSummary:
+    num_vars: int | None = None
+    num_constraints: int | None = None
+
+
+@pydantic_dataclass
+class OptimizerRun:
+    name: str
+    timestamp_start: datetime | None = None
+    timestamp_end: datetime | None = None
+    optimizer_timestamp_start: datetime | None = None
+    optimizer_timestamp_end: datetime | None = None
+
+    def tts(self) -> float | None:
+        if self.timestamp_start is None or self.timestamp_end is None:
+            return None
+        return (self.timestamp_end - self.timestamp_start).total_seconds()
+
+    def optimizer_tts(self) -> float | None:
+        if self.optimizer_timestamp_start is None or self.optimizer_timestamp_end is None:
+            return None
+        return (self.optimizer_timestamp_end - self.optimizer_timestamp_start).total_seconds()
+
+
+@pydantic_dataclass
+class OptimizationResult(Generic[SolutionT, RunT, SummaryT]):
+    solution: SolutionT
+    run: RunT
+    problem: SummaryT
+
+    def write(self, path: str | Path) -> None:
+        target = Path(path)
+        payload = TypeAdapter(type(self)).dump_json(self).decode("utf-8")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.write("\n")
+
+
+@pydantic_dataclass
 class Solution:
     """
     Generic solution from an optimizer.
@@ -26,8 +79,7 @@ class Solution:
         status: Solver termination status
         objective: Objective function value
         var_values: Variable name -> value mapping
-        tts: Time to solution (seconds), set by Optimizer.optimize()
-        info: Additional solver-specific information (e.g., gap, iterations)
+        known_optimal_value: Optional a-priori optimal value (if known)
     """
 
     status: Status
@@ -39,8 +91,7 @@ class Solution:
     # Optional index mapping for non-dense variable arrays:
     # var_name -> list of Pyomo indices in the array's flattened order (or nested order by convention).
     var_array_index: Dict[str, Any] = field(default_factory=dict)
-    tts: Optional[float] = None
-    info: Dict[str, Any] = field(default_factory=dict)
+    known_optimal_value: Optional[float] = None
 
     @property
     def feasible(self) -> bool:
@@ -49,8 +100,7 @@ class Solution:
 
     def __repr__(self) -> str:
         status_str = "✓ " + self.status.name if self.feasible else "✗ " + self.status.name
-        time_str = f", tts={self.tts:.3f}s" if self.tts is not None else ""
-        return f"Solution({status_str}, obj={self.objective:.4f}, vars={len(self.var_values)}{time_str})"
+        return f"Solution({status_str}, obj={self.objective:.4f}, vars={len(self.var_values)})"
 
     def equals(
         self,
@@ -94,4 +144,9 @@ class Solution:
             idx_text = key[len(prefix) : -1]
             out.append(self._parse_index(idx_text))
         return out
+
+
+@pydantic_dataclass
+class InfoSolution(Solution):
+    info: Dict[str, Any] = field(default_factory=dict)
 

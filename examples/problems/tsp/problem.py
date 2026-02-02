@@ -7,10 +7,11 @@ import pyomo.environ as pyo
 
 from qoco.core.converter import Converter
 from qoco.core.problem import Problem
+from qoco.core.solution import ProblemSummary
 
 
 @dataclass
-class TSP(Problem):
+class TSP(Problem[ProblemSummary]):
     name: str
     dist: List[List[float]]
     edge_mask: List[List[bool]] | None = None
@@ -27,10 +28,8 @@ class TSP(Problem):
                 errors.append("edge_mask must be square with same shape as dist")
         return len(errors) == 0, errors
 
-    def summary(self) -> str:
-        valid, errors = self.validate()
-        status = "✓ Valid" if valid else f"✗ {len(errors)} errors"
-        return f"TSP('{self.name}') n={len(self.dist)}; {status}"
+    def summary(self) -> ProblemSummary:
+        return ProblemSummary()
 
     class MILPConverter(Converter["TSP", pyo.ConcreteModel]):
         def convert(self, problem: "TSP") -> pyo.ConcreteModel:

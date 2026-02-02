@@ -8,7 +8,7 @@ from planqk.service.client import PlanqkServiceClient
 
 from qoco.core.converter import Converter
 from qoco.core.optimizer import Optimizer, P
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -19,9 +19,10 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
 
 
 @dataclass
-class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution]):
+class KipuBaseOptimizer(Optimizer[P, dict[str, float], InfoSolution, OptimizerRun, ProblemSummary]):
     """Base optimizer for Kipu Quantum Hub services."""
 
+    name: str = "Kipu"
     service_endpoint: str = ""
     consumer_key: str = ""
     consumer_secret: str = ""
@@ -32,7 +33,7 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution]):
     execute_circuit: bool = True
     converter: Converter[P, dict[str, float]] | None = None
 
-    def _optimize(self, problem_dict: dict[str, float]) -> Solution:
+    def _optimize(self, problem_dict: dict[str, float]) -> tuple[InfoSolution, OptimizerRun]:
         client = PlanqkServiceClient(
             str(self.service_endpoint),
             str(self.consumer_key),
@@ -82,7 +83,7 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution]):
             "service_endpoint": str(self.service_endpoint),
             "execution_id": getattr(execution, "id", None),
         }
-        return Solution(
+        solution = InfoSolution(
             status=Status.FEASIBLE,
             objective=float(cost),
             var_values=var_values,
@@ -90,3 +91,4 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution]):
             var_array_index={"x": list(names)},
             info=info,
         )
+        return solution, OptimizerRun(name=self.name)

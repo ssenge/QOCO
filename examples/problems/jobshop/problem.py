@@ -7,6 +7,7 @@ import pyomo.environ as pyo
 
 from qoco.core.converter import Converter
 from qoco.core.problem import Problem
+from qoco.core.solution import ProblemSummary
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,7 @@ class Operation:
 
 
 @dataclass
-class JobShopScheduling(Problem):
+class JobShopScheduling(Problem[ProblemSummary]):
     name: str
     jobs: List[List[Operation]]
 
@@ -35,12 +36,8 @@ class JobShopScheduling(Problem):
                     errors.append(f"job {j} has negative machine id")
         return len(errors) == 0, errors
 
-    def summary(self) -> str:
-        valid, errors = self.validate()
-        status = "✓ Valid" if valid else f"✗ {len(errors)} errors"
-        n_jobs = len(self.jobs)
-        n_ops = sum(len(ops) for ops in self.jobs)
-        return f"JobShopScheduling('{self.name}') jobs={n_jobs} ops={n_ops}; {status}"
+    def summary(self) -> ProblemSummary:
+        return ProblemSummary()
 
     class MILPConverter(Converter["JobShopScheduling", pyo.ConcreteModel]):
         def convert(self, problem: "JobShopScheduling") -> pyo.ConcreteModel:

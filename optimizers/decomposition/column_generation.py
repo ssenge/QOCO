@@ -9,7 +9,7 @@ import pyomo.environ as pyo
 
 from qoco.converters.decomposition.column_generation import ColumnGenerationDecomposition, SetPartitionMaster
 from qoco.core.optimizer import Optimizer
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import InfoSolution, OptimizerRun, ProblemSummary, Status
 from qoco.optimizers.decomposition.plans.column_generation import ColumnGenState
 
 
@@ -41,14 +41,14 @@ class ColGenRunLog:
 
 
 class FinalStepStrategy(Protocol):
-    def run(self, state: ColumnGenState) -> Solution: ...
+    def run(self, state: ColumnGenState) -> InfoSolution: ...
 
 
 @dataclass(frozen=True)
 class NoFinalStepStrategy:
-    def run(self, state: ColumnGenState) -> Solution:
+    def run(self, state: ColumnGenState) -> InfoSolution:
         if state.last_master_solution is None:
-            return Solution(status=Status.UNKNOWN, objective=math.inf, var_values={}, info={"iters": int(state.it)})
+            return InfoSolution(status=Status.UNKNOWN, objective=math.inf, var_values={}, info={"iters": int(state.it)})
         out = state.last_master_solution
         out.info = dict(out.info)
         out.info.setdefault("colgen_iters", int(state.it))
@@ -58,11 +58,11 @@ class NoFinalStepStrategy:
 
 @dataclass(frozen=True)
 class IntegerMasterStrategy:
-    optimizer: Optimizer[pyo.ConcreteModel, object, Solution]
+    optimizer: Optimizer[pyo.ConcreteModel, object, InfoSolution, OptimizerRun, ProblemSummary]
 
-    def run(self, state: ColumnGenState) -> Solution:
+    def run(self, state: ColumnGenState) -> InfoSolution:
         model = state.master.build_integer_model()
-        sol = self.optimizer.optimize(model, log=False)
+        sol = self.optimizer.optimize(model).solution
         sol.info = dict(sol.info)
         sol.info["colgen_iters"] = int(state.it)
         sol.info["colgen_columns"] = int(len(state.master.columns))
@@ -73,7 +73,7 @@ class IntegerMasterStrategy:
 class RoundingStrategy:
     tol: float = 1e-6
 
-    def run(self, state: ColumnGenState) -> Solution:
+    def run(self, state: ColumnGenState) -> InfoSolution:
         master = state.master
         model = master.model
         chosen = [j for j in model.z if pyo.value(model.z[j]) >= 0.5]
@@ -83,21 +83,22 @@ class RoundingStrategy:
         status = Status.FEASIBLE if feasible else Status.UNKNOWN
         var_values = {f"z[{idx}]": 1.0 for idx in chosen}
         info = {"colgen_iters": int(state.it), "colgen_columns": int(len(master.columns))}
-        return Solution(status=status, objective=objective, var_values=var_values, info=info)
+        return InfoSolution(status=status, objective=objective, var_values=var_values, info=info)
 
 
 @dataclass(frozen=True)
 class BranchAndPriceStrategy:
-    master_optimizer: Optimizer[pyo.ConcreteModel, object, Solution]
-    pricing_optimizer: Optimizer[Any, object, Solution]
+    master_optimizer: Optimizer[pyo.ConcreteModel, object, InfoSolution, OptimizerRun, ProblemSummary]
+    pricing_optimizer: Optimizer[Any, object, InfoSolution, OptimizerRun, ProblemSummary]
 
-    def run(self, state: ColumnGenState) -> Solution:
+    def run(self, state: ColumnGenState) -> InfoSolution:
         raise NotImplementedError("Branch-and-price strategy not implemented yet.")
 
 
 @dataclass
-class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationDecomposition, Solution]):
-    master_solver: Optimizer[pyo.ConcreteModel, object, Solution] | None = None
+class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationDecomposition, InfoSolution, OptimizerRun, ProblemSummary]):
+    name: str = "ColumnGeneration"
+    master_solver: Optimizer[pyo.ConcreteModel, object, InfoSolution, OptimizerRun, ProblemSummary] | None = None
     final_step_strategy: FinalStepStrategy | None = None
     tol: float = 1e-6
     max_steps: int = 10_000
@@ -107,7 +108,7 @@ class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationD
         if self.master_solver is None:
             raise ValueError("master_solver is required")
 
-    def _optimize(self, decomp: ColumnGenerationDecomposition) -> Solution:
+    def _optimize(self, decomp: ColumnGenerationDecomposition) -> tuple[InfoSolution, OptimizerRun]:
         state = ColumnGenState(master=decomp.master, pricing=decomp.pricing, tol=self.tol)
         t0 = time.perf_counter()
         partition_keys = list(state.pricing.partitions() or [])
@@ -130,7 +131,7 @@ class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationD
         for _ in range(int(self.max_steps)):
             if self.time_limit_s is not None and (time.perf_counter() - t0) >= float(self.time_limit_s):
                 break
-            master_solution = self.master_solver.optimize(state.master.model, log=False)
+            master_solution = self.master_solver.optimize(state.master.model).solution
             if master_solution.status not in (Status.OPTIMAL, Status.FEASIBLE):
                 raise RuntimeError(f"column_generation: master solve failed: {master_solution.status}")
             state.last_master_solution = master_solution
@@ -169,4 +170,4 @@ class ColGenOptimizer(Optimizer[ColumnGenerationDecomposition, ColumnGenerationD
             solution = self.final_step_strategy.run(state)
         solution.info = dict(solution.info)
         solution.info["colgen_log"] = log
-        return solution
+        return solution, OptimizerRun(name=self.name)

@@ -4,11 +4,15 @@ Abstract base class for optimization problems.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Generic, List, Tuple, TypeVar
+
+from qoco.core.solution import ProblemSummary
+
+SummaryT = TypeVar("SummaryT", bound=ProblemSummary)
 
 
 @dataclass
-class Problem(ABC):
+class Problem(ABC, Generic[SummaryT]):
     """Abstract base class for optimization problems."""
 
     name: str
@@ -19,7 +23,7 @@ class Problem(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def summary(self) -> str:
-        """Return a text summary of the problem."""
+    def summary(self) -> SummaryT:
+        """Return a structured summary of the problem."""
         raise NotImplementedError
 

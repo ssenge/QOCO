@@ -14,22 +14,23 @@ import pyomo.environ as pyo
 from qoco.core.problem import Problem
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.converter import Converter
-from qoco.core.solution import Solution, Status
+from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
 
 
 @dataclass
-class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution]):
+class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, OptimizerRun, ProblemSummary]):
     """
     Brute force solver - enumerate all 2^n binary variable combinations.
     
     Works on any Pyomo model with binary variables.
     Only for testing with tiny instances!
     """
+    name: str = "BruteForce"
     converter: Converter[P, pyo.ConcreteModel] = field(default_factory=IdentityConverter)
     max_vars: int = 20  # Safety limit: 2^20 = ~1M iterations
     
-    def _optimize(self, model: pyo.ConcreteModel) -> Solution:
+    def _optimize(self, model: pyo.ConcreteModel) -> tuple[Solution, OptimizerRun]:
         # Collect all binary variables, separating fixed and free
         free_vars = []
         fixed_vars = []
@@ -53,11 +54,12 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution])
         if n_free == 0:
             # No free variables, just evaluate
             var_values = self._extract_all_vars(model, free_vars, fixed_vars)
-            return Solution(
+            solution = Solution(
                 status=Status.OPTIMAL if self._is_feasible(model) else Status.INFEASIBLE,
                 objective=pyo.value(model.obj),
                 var_values=var_values,
             )
+            return solution, OptimizerRun(name=self.name)
         
         best_obj = float('inf')
         best_bits = None
@@ -87,17 +89,19 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution])
             for (var, idx), val in zip(free_vars, best_bits):
                 var[idx].set_value(val)
             var_values = self._extract_all_vars(model, free_vars, fixed_vars)
-            return Solution(
+            solution = Solution(
                 status=Status.OPTIMAL,  # Brute force is exhaustive
                 objective=best_obj,
                 var_values=var_values,
             )
+            return solution, OptimizerRun(name=self.name)
         else:
-            return Solution(
+            solution = Solution(
                 status=Status.INFEASIBLE,
                 objective=float('inf'),
                 var_values={},
             )
+            return solution, OptimizerRun(name=self.name)
     
     def _extract_all_vars(self, model: pyo.ConcreteModel, free_vars, fixed_vars) -> dict:
         """Extract all variable values (both free and fixed)."""
