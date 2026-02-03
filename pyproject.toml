@@ -39,8 +39,5 @@ gurobi = [
 ]
 
 [tool.setuptools]
-package-dir = { "qoco" = "." }
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["*"]
+packages = ["qoco"]
+package-dir = {"" = "."}
