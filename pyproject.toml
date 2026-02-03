@@ -38,6 +38,9 @@ gurobi = [
   "gurobipy==13.0.1",
 ]
 
+[tool.setuptools]
+package-dir = { "qoco" = "." }
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["qoco*"]
+include = ["*"]
