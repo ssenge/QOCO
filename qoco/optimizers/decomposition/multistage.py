@@ -54,7 +54,7 @@ class MultiStageSolver(Generic[StateT, ProblemT, TagT]):
             if task is None:
                 break
 
-            res = task.solver.optimize(task.problem, log=False)
+            res = task.solver.optimize(task.problem)
             st = self.plan.apply(st, StageResult(task=task, solution=res.solution))
 
         self.state = st
