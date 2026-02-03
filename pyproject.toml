@@ -9,7 +9,7 @@ description = "Quantum Optimization COre"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "numpy>=1.23",
+  "numpy>=1.23,<2.4",
   "pyomo>=6.6",
 ]
 
@@ -39,8 +39,7 @@ gurobi = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
-where = ["qoco"]
-include = ["qoco*"]
+where = ["."]
+include = ["qoco", "qoco.*"]
