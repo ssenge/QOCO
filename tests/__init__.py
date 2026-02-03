@@ -1,3 +1,0 @@
-"""
-qoco tests package.
-"""
