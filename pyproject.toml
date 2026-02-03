@@ -7,8 +7,8 @@ name = "qoco"
 version = "0.0.1"
 description = "Quantum Optimization COre"
 readme = "README.md"
-authors = [{name = "Sebastian Senge", email = ""}]
-maintainers = [{name = "Sebastian Senge", email = ""}]
+authors = [{name = "Sebastian Senge"}]
+maintainers = [{name = "Sebastian Senge"}]
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.23,<2.4",
