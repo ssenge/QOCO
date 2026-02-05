@@ -1,234 +1,337 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Callable, Generic, Iterable, Iterator, TypeVar
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from functools import reduce
+from typing import Callable, Generic, Iterable, Iterator, TypeVar, Self
 
 import networkx as nx
 
 NodeT = TypeVar("NodeT")
 StateT = TypeVar("StateT")
+ItemT = TypeVar("ItemT")
+LeftT = TypeVar("LeftT")
+RightT = TypeVar("RightT")
+MidT = TypeVar("MidT")
 
 
-class PathFilter(Generic[NodeT, StateT]):
-    def state_init(self, start: NodeT, state: StateT | None) -> StateT | None:
-        return state
+class Filter(Generic[ItemT]):
+    @classmethod
+    def combine(cls, filters: list[Self] | None) -> Self:
+        return reduce(lambda left, right: left.compose(right), filters or [], AcceptFilter())
 
+    def accept(self, *args) -> bool:
+        return True
+
+    def __call__(self, *args) -> bool:
+        return self.accept(*args)
+
+    def compose(self, other: Self) -> Self: 
+        return _AndFilter(self, other)  # This is sofar AND-only composition. TODO: add OR-composition.
+
+
+class AcceptFilter(Filter[ItemT]):
+    def accept(self, *args) -> bool:
+        return True
+
+
+class RejectFilter(Filter[ItemT]):
+    def accept(self, *args) -> bool:
+        return False
+
+
+class TernaryFilter(Filter[tuple[LeftT, MidT, RightT]], ABC):
+    @abstractmethod
+    def accept(self, left: LeftT, mid: MidT, right: RightT) -> bool:
+        raise NotImplementedError
+
+
+class UnaryFilter(Filter[ItemT], ABC):
+    @abstractmethod
+    def accept(self, item: ItemT) -> bool:
+        raise NotImplementedError
+
+
+class BinaryFilter(Filter[tuple[LeftT, RightT]], ABC):
+    @abstractmethod
+    def accept(self, left: LeftT, right: RightT) -> bool:
+        raise NotImplementedError
+
+
+class PathStateTracker(Generic[NodeT, StateT], ABC):
+    @abstractmethod
+    def state_init(self, start: NodeT) -> StateT | None:
+        raise NotImplementedError
+
+    @abstractmethod
     def state_update(self, state: StateT | None, current: NodeT, nxt: NodeT) -> StateT | None:
-        return state
+        raise NotImplementedError
 
-    def filter(self, path: list[NodeT], nxt: NodeT, state: StateT | None) -> bool:
+
+@dataclass
+class MaxItemFilter(UnaryFilter[ItemT]):
+    max_items: int
+    _count: int = field(default=0, init=False)
+
+    def accept(self, item: ItemT) -> bool:
+        if self._count >= self.max_items:
+            return False
+        self._count += 1
         return True
 
-    def accept(self, path: list[NodeT], state: StateT | None) -> bool:
-        return True
+
+@dataclass
+class _AndFilter(Filter[ItemT]):
+    left: Filter[ItemT]
+    right: Filter[ItemT]
+
+    def accept(self, *args) -> bool:
+        return self.left.accept(*args) and self.right.accept(*args)
+
+
+
+
+def apply_filter(filter_obj: Filter[ItemT], items: Iterable[ItemT]) -> list[ItemT]:
+    return [item for item in items if filter_obj.accept(item)]
+
+
+def prepare_filter(filter_obj: Filter, *args, **kwargs) -> None:
+    if hasattr(filter_obj, "prepare"):
+        filter_obj.prepare(*args, **kwargs)
+        return
+    if isinstance(filter_obj, _AndFilter):
+        prepare_filter(filter_obj.left, *args, **kwargs)
+        prepare_filter(filter_obj.right, *args, **kwargs)
+        return
+
+
+def apply_neighbor_filter(
+    filter_obj: BinaryFilter[NodeT, NodeT],
+    node: NodeT,
+    neighbors: Iterable[NodeT],
+) -> list[NodeT]:
+    return [nxt for nxt in neighbors if filter_obj.accept(node, nxt)]
 
 
 @dataclass(frozen=True)
-class MaxPathLengthFilter(PathFilter[NodeT, StateT]):
+class MaxPathLengthFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     max_length: int
 
-    def filter(self, path: list[NodeT], nxt: NodeT, state: StateT | None) -> bool:
-        return len(path) < int(self.max_length)
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            return True
+        return len(path) < self.max_length
 
 
 @dataclass(frozen=True)
-class MinPathLengthFilter(PathFilter[NodeT, StateT]):
+class MinPathLengthFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     min_length: int
 
-    def accept(self, path: list[NodeT], state: StateT | None) -> bool:
-        return len(path) >= int(self.min_length)
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is not None:
+            return True
+        return len(path) >= self.min_length
 
 
 @dataclass(frozen=True)
-class RequiredNodesFilter(PathFilter[NodeT, StateT]):
+class RequiredNodesFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     required: set[NodeT]
 
-    def accept(self, path: list[NodeT], state: StateT | None) -> bool:
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is not None:
+            return True
         return self.required.issubset(path)
 
 
 @dataclass(frozen=True)
-class ForbiddenNodesFilter(PathFilter[NodeT, StateT]):
+class ForbiddenNodesFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     forbidden: set[NodeT]
 
-    def filter(self, path: list[NodeT], nxt: NodeT, state: StateT | None) -> bool:
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            return True
         return nxt not in self.forbidden
 
 
 @dataclass(frozen=True)
-class RequiredEdgesFilter(PathFilter[NodeT, StateT]):
+class RequiredEdgesFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     required: set[tuple[NodeT, NodeT]]
 
-    def accept(self, path: list[NodeT], state: StateT | None) -> bool:
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is not None:
+            return True
         edges = set(zip(path, path[1:]))
         return self.required.issubset(edges)
 
 
 @dataclass(frozen=True)
-class ForbiddenEdgesFilter(PathFilter[NodeT, StateT]):
+class ForbiddenEdgesFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     forbidden: set[tuple[NodeT, NodeT]]
 
-    def filter(self, path: list[NodeT], nxt: NodeT, state: StateT | None) -> bool:
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            return True
         return (path[-1], nxt) not in self.forbidden
 
 
 @dataclass(frozen=True)
-class UniqueNodeAttrFilter(PathFilter[NodeT, StateT]):
+class UniqueNodeAttrFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     graph: nx.DiGraph
     attr: str
 
-    def filter(self, path: list[NodeT], nxt: NodeT, state: StateT | None) -> bool:
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            return True
         nxt_val = self.graph.nodes[nxt].get(self.attr)
         return all(self.graph.nodes[n].get(self.attr) != nxt_val for n in path)
 
 
 @dataclass(frozen=True)
-class MaxEdgeAttrSumFilter(PathFilter[NodeT, float]):
+class MaxEdgeAttrSumFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     graph: nx.DiGraph
     attr: str
     max_total: float
     default: float = 0.0
 
-    def state_init(self, start: NodeT, state: float | None) -> float:
-        return 0.0
-
-    def state_update(self, state: float | None, current: NodeT, nxt: NodeT) -> float:
-        base = float(state) if state is not None else 0.0
-        edge_val = float(self.graph.edges[current, nxt].get(self.attr, self.default))
-        return base + edge_val
-
-    def filter(self, path: list[NodeT], nxt: NodeT, state: float | None) -> bool:
-        return self.state_update(state, path[-1], nxt) <= float(self.max_total)
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            return True
+        total = 0.0
+        for u, v in zip(path, path[1:]):
+            total += float(self.graph.edges[u, v].get(self.attr, self.default))
+        total += float(self.graph.edges[path[-1], nxt].get(self.attr, self.default))
+        return total <= float(self.max_total)
 
 
 @dataclass(frozen=True)
-class MinEdgeAttrSumFilter(PathFilter[NodeT, float]):
+class MinEdgeAttrSumFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     graph: nx.DiGraph
     attr: str
     min_total: float
     default: float = 0.0
 
-    def state_init(self, start: NodeT, state: float | None) -> float:
-        return 0.0
-
-    def state_update(self, state: float | None, current: NodeT, nxt: NodeT) -> float:
-        base = float(state) if state is not None else 0.0
-        edge_val = float(self.graph.edges[current, nxt].get(self.attr, self.default))
-        return base + edge_val
-
-    def accept(self, path: list[NodeT], state: float | None) -> bool:
-        total = float(state) if state is not None else 0.0
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is not None:
+            return True
+        total = 0.0
+        for u, v in zip(path, path[1:]):
+            total += float(self.graph.edges[u, v].get(self.attr, self.default))
         return total >= float(self.min_total)
 
 
 @dataclass(frozen=True)
-class MaxNodeAttrSumFilter(PathFilter[NodeT, float]):
+class MaxNodeAttrSumFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     graph: nx.DiGraph
     attr: str
     max_total: float
     default: float = 0.0
 
-    def state_init(self, start: NodeT, state: float | None) -> float:
-        return float(self.graph.nodes[start].get(self.attr, self.default))
-
-    def state_update(self, state: float | None, current: NodeT, nxt: NodeT) -> float:
-        base = float(state) if state is not None else 0.0
-        node_val = float(self.graph.nodes[nxt].get(self.attr, self.default))
-        return base + node_val
-
-    def filter(self, path: list[NodeT], nxt: NodeT, state: float | None) -> bool:
-        return self.state_update(state, path[-1], nxt) <= float(self.max_total)
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            return True
+        total = 0.0
+        for node in path:
+            total += float(self.graph.nodes[node].get(self.attr, self.default))
+        total += float(self.graph.nodes[nxt].get(self.attr, self.default))
+        return total <= float(self.max_total)
 
 
 @dataclass(frozen=True)
-class MinNodeAttrSumFilter(PathFilter[NodeT, float]):
+class MinNodeAttrSumFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     graph: nx.DiGraph
     attr: str
     min_total: float
     default: float = 0.0
 
-    def state_init(self, start: NodeT, state: float | None) -> float:
-        return float(self.graph.nodes[start].get(self.attr, self.default))
-
-    def state_update(self, state: float | None, current: NodeT, nxt: NodeT) -> float:
-        base = float(state) if state is not None else 0.0
-        node_val = float(self.graph.nodes[nxt].get(self.attr, self.default))
-        return base + node_val
-
-    def accept(self, path: list[NodeT], state: float | None) -> bool:
-        total = float(state) if state is not None else 0.0
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is not None:
+            return True
+        total = 0.0
+        for node in path:
+            total += float(self.graph.nodes[node].get(self.attr, self.default))
         return total >= float(self.min_total)
 
 
 @dataclass(frozen=True)
-class PathPredicateFilter(PathFilter[NodeT, StateT]):
-    allow_step: Callable[[list[NodeT], NodeT, StateT | None], bool]
+class PathPredicateFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
+    allow_step: Callable[[list[NodeT], NodeT | None, StateT | None], bool]
     allow_path: Callable[[list[NodeT], StateT | None], bool] | None = None
 
-    def filter(self, path: list[NodeT], nxt: NodeT, state: StateT | None) -> bool:
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is None:
+            if self.allow_path is None:
+                return True
+            return bool(self.allow_path(path, state))
         return bool(self.allow_step(path, nxt, state))
-
-    def accept(self, path: list[NodeT], state: StateT | None) -> bool:
-        if self.allow_path is None:
-            return True
-        return bool(self.allow_path(path, state))
 
 
 @dataclass(frozen=True)
 class GraphTraversal:
     graph: nx.DiGraph
-    filters: list[PathFilter] | None = None
 
-    def dfs(self, start_nodes: Iterable[NodeT]) -> Iterator[list[NodeT]]:
-        active_filters = self.filters or []
+    def dfs(
+        self,
+        start_nodes: Iterable[NodeT],
+        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
+        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
+    ) -> Iterator[list[NodeT]]:
         for start in start_nodes:
-            state: StateT | None = None
-            for f in active_filters:
-                state = f.state_init(start, state)
+            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
             stack: list[tuple[NodeT, list[NodeT], StateT | None]] = [(start, [start], state)]
             while stack:
                 node, path, state = stack.pop()
-                if all(f.accept(path, state) for f in active_filters):
+                if path_filter.accept(path, None, state):
+                    if not global_filter.accept(path):
+                        return
                     yield path
-                for nxt in self.graph.neighbors(node):
+                for nxt in apply_neighbor_filter(neighbor_filter, node, self.graph.neighbors(node)):
                     if nxt in path:
                         continue
-                    if not all(f.filter(path, nxt, state) for f in active_filters):
+                    if not path_filter.accept(path, nxt, state):
                         continue
-                    next_state = state
-                    for f in active_filters:
-                        next_state = f.state_update(next_state, node, nxt)
+                    next_state = (
+                        state_tracker.state_update(state, node, nxt) if state_tracker else None
+                    )
                     stack.append((nxt, [*path, nxt], next_state))
 
-    def bfs(self, start_nodes: Iterable[NodeT]) -> Iterator[list[NodeT]]:
-        active_filters = self.filters or []
+    def bfs(
+        self,
+        start_nodes: Iterable[NodeT],
+        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
+        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
+    ) -> Iterator[list[NodeT]]:
         queue: list[tuple[NodeT, list[NodeT], StateT | None]] = []
         for start in start_nodes:
-            state: StateT | None = None
-            for f in active_filters:
-                state = f.state_init(start, state)
+            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
             queue.append((start, [start], state))
         while queue:
             node, path, state = queue.pop(0)
-            if all(f.accept(path, state) for f in active_filters):
+            if path_filter.accept(path, None, state):
+                if not global_filter.accept(path):
+                    return
                 yield path
-            for nxt in self.graph.neighbors(node):
+            for nxt in apply_neighbor_filter(neighbor_filter, node, self.graph.neighbors(node)):
                 if nxt in path:
                     continue
-                if not all(f.filter(path, nxt, state) for f in active_filters):
+                if not path_filter.accept(path, nxt, state):
                     continue
-                next_state = state
-                for f in active_filters:
-                    next_state = f.state_update(next_state, node, nxt)
+                next_state = (
+                    state_tracker.state_update(state, node, nxt) if state_tracker else None
+                )
                 queue.append((nxt, [*path, nxt], next_state))
 
 
 def prune_graph_by_paths(
     graph: nx.DiGraph,
     start_nodes: Iterable[NodeT],
-    filters: list[PathFilter] | None = None,
+    path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+    state_tracker: PathStateTracker[NodeT, StateT] | None = None,
 ) -> nx.DiGraph:
     used_edges: set[tuple[NodeT, NodeT]] = set()
-    for path in GraphTraversal(graph, filters=filters).dfs(start_nodes):
+    for path in GraphTraversal(graph).dfs(
+        start_nodes, path_filter=path_filter, state_tracker=state_tracker
+    ):
         used_edges.update(zip(path, path[1:]))
     return graph.edge_subgraph(used_edges).copy()

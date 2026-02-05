@@ -90,6 +90,6 @@ def test_create_model_from_flags() -> None:
     registry.register("hc-1", lambda add_ctx, model: model.applied.append(add_ctx.value + 1))
     registry.register("sc-2", lambda add_ctx, model: model.applied.append(add_ctx.value + 2))
 
-    model = registry.create_model_from_flags()
+    model = registry.create()
 
     assert model.applied == [3, 4, 5]

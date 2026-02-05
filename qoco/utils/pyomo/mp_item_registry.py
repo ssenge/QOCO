@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
+import time
 from typing import Callable, Dict, Iterable, Generic, Sequence, TypeVar
 
 import pyomo.environ as pyo
@@ -96,9 +98,8 @@ class MPItemRegistry(Generic[Ctx]):
             model = self.add(label, ctx, model)
         return model
 
-    def create_model_from_flags(
+    def create(
         self,
-        *,
         obj_terms: Sequence[str | MPItem | type[MPItem]] | None = None,
         objective_attr_resolver: Callable[[str], str] | None = None,
     ) -> pyo.ConcreteModel:
@@ -106,8 +107,24 @@ class MPItemRegistry(Generic[Ctx]):
             raise ValueError("MPItemRegistry ctx is not set")
         if self.model_factory is None:
             raise ValueError("MPItemRegistry model_factory is not set")
+        start_ts = datetime.now().isoformat(sep=" ", timespec="seconds")
+        t0 = time.perf_counter()
+        # TODO: profiling only, remove after analysis.
+        print(f"[MPItemRegistry.create] start at {start_ts}")
         model = self.model_factory(self.ctx)
+        # TODO: profiling only, remove after analysis.
+        print(f"[MPItemRegistry.create] add_all start at {datetime.now().isoformat(sep=' ', timespec='seconds')}")
         model = self.add_all(self._items.keys(), self.ctx, model)
+        # TODO: profiling only, remove after analysis.
+        print(f"[MPItemRegistry.create] add_all done in {time.perf_counter() - t0:.2f}s")
+        for name in ("D", "S", "E", "K", "KS", "KE"):
+            if hasattr(model, name):
+                try:
+                    size = len(getattr(model, name))
+                except Exception:
+                    size = "?"
+                # TODO: profiling only, remove after analysis.
+                print(f"[MPItemRegistry.create] set {name} size: {size}")
         if obj_terms is None:
             return model
 
@@ -140,6 +157,8 @@ class MPItemRegistry(Generic[Ctx]):
             total += getattr(model, attr)
 
         model.obj = pyo.Objective(expr=total)
+        # TODO: profiling only, remove after analysis.
+        print(f"[MPItemRegistry.create] done at {datetime.now().isoformat(sep=' ', timespec='seconds')}")
         return model
 
 
