@@ -94,8 +94,14 @@ class MPItemRegistry(Generic[Ctx]):
         return model
 
     def add_all(self, labels: Iterable[str], ctx: Ctx, model: pyo.ConcreteModel) -> pyo.ConcreteModel:
+        if not hasattr(model, "_item_timings"):
+            model._item_timings = {}
         for label in labels:
+            t0 = time.perf_counter()
             model = self.add(label, ctx, model)
+            elapsed = time.perf_counter() - t0
+            key = MPItemFlags._normalize(label)
+            model._item_timings[key] = model._item_timings.get(key, 0.0) + elapsed
         return model
 
     def create(
@@ -117,6 +123,7 @@ class MPItemRegistry(Generic[Ctx]):
         model = self.add_all(self._items.keys(), self.ctx, model)
         # TODO: profiling only, remove after analysis.
         print(f"[MPItemRegistry.create] add_all done in {time.perf_counter() - t0:.2f}s")
+        _print_item_timings(model)
         for name in ("D", "S", "E", "K", "KS", "KE"):
             if hasattr(model, name):
                 try:
@@ -125,9 +132,12 @@ class MPItemRegistry(Generic[Ctx]):
                     size = "?"
                 # TODO: profiling only, remove after analysis.
                 print(f"[MPItemRegistry.create] set {name} size: {size}")
+        print("Done: adding all items to model, point 0")
         if obj_terms is None:
+            print("Done: adding all items to model, point 0.1 -> return model")
             return model
 
+        print("Done: adding all items to model, point 1")
         labels: list[str] = []
         for term in obj_terms:
             if isinstance(term, str):
@@ -137,17 +147,18 @@ class MPItemRegistry(Generic[Ctx]):
             if label is None:
                 raise TypeError("obj_terms entries must be str, MPItem, or MPItem class")
             labels.append(label)
-
+        print("Done: adding all items to model, point 2")
         for label in labels:
             if not self.flags.enabled(label):
                 raise ValueError(f"Objective term '{label}' is disabled via flags")
             self.add(label, self.ctx, model)
-
+        print("Done: adding all items to model, point 3")
         if hasattr(model, "obj"):
             model.del_component(model.obj)
         if hasattr(model, "objective"):
             model.del_component(model.objective)
 
+        print("Done: adding objective to model, point 4")
         resolve_attr = objective_attr_resolver or (lambda label: f"{label.replace('-', '_')}_objective")
         total = 0
         for label in labels:
@@ -156,10 +167,24 @@ class MPItemRegistry(Generic[Ctx]):
                 raise ValueError(f"Objective term '{label}' not found on model")
             total += getattr(model, attr)
 
+        print("Done: adding objective to model, point 5")
         model.obj = pyo.Objective(expr=total)
+        print("Done: adding objective to model, point 6")
         # TODO: profiling only, remove after analysis.
         print(f"[MPItemRegistry.create] done at {datetime.now().isoformat(sep=' ', timespec='seconds')}")
         return model
+
+
+def _print_item_timings(model: pyo.ConcreteModel, top_n: int = 20) -> None:
+    if not hasattr(model, "_item_timings"):
+        return
+    timings = model._item_timings
+    if not timings:
+        return
+    ranked = sorted(timings.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    print("[MPItemRegistry.create] slowest items:")
+    for label, seconds in ranked:
+        print(f"  {label}: {seconds:.3f}s")
 
 
 @dataclass(frozen=True)

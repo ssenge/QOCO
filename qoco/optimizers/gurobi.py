@@ -25,12 +25,14 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
         converter: Converts problem to Pyomo model
         time_limit: Max solve time in seconds (None = no limit)
         mip_gap: Relative MIP gap tolerance (e.g., 0.01 = 1%)
+        log_file: Path to write the Gurobi log (None = no file)
         verbose: Print solver output
     """
     name: str = "Gurobi"
     converter: Converter[P, pyo.ConcreteModel] = field(default_factory=IdentityConverter)
     time_limit: Optional[float] = None
     mip_gap: Optional[float] = None
+    log_file: Optional[str] = None
     verbose: bool = False
     capture_duals: bool = False
 
@@ -44,6 +46,8 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
             solver.options["TimeLimit"] = self.time_limit
         if self.mip_gap is not None:
             solver.options["MIPGap"] = self.mip_gap
+        if self.log_file is not None:
+            solver.options["LogFile"] = self.log_file
 
         result = solver.solve(model, tee=self.verbose)
 

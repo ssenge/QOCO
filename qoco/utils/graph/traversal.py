@@ -267,6 +267,149 @@ class PathPredicateFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None
 class GraphTraversal:
     graph: nx.DiGraph
 
+    def dfs_v2(
+        self,
+        start_nodes: Iterable[NodeT],
+        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
+        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
+        max_only: bool = False,
+    ) -> Iterator[list[NodeT]]:
+        if not max_only:
+            for start in start_nodes:
+                state: StateT | None = state_tracker.state_init(start) if state_tracker else None
+                stack: list[tuple[NodeT, list[NodeT], StateT | None]] = [(start, [start], state)]
+                while stack:
+                    node, path, state = stack.pop()
+                    if path_filter.accept(path, None, state):
+                        if not global_filter.accept(path):
+                            return
+                        yield path
+                    for nxt in apply_neighbor_filter(
+                        neighbor_filter, node, self.graph.neighbors(node)
+                    ):
+                        if nxt in path:
+                            continue
+                        if not path_filter.accept(path, nxt, state):
+                            continue
+                        next_state = (
+                            state_tracker.state_update(state, node, nxt)
+                            if state_tracker
+                            else None
+                        )
+                        stack.append((nxt, [*path, nxt], next_state))
+            return
+        for start in start_nodes:
+            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
+            node = start
+            path = [start]
+            while True:
+                neighbors = apply_neighbor_filter(
+                    neighbor_filter, node, self.graph.neighbors(node)
+                )
+                next_node: NodeT | None = None
+                for nxt in neighbors:
+                    if nxt in path:
+                        continue
+                    if not path_filter.accept(path, nxt, state):
+                        continue
+                    next_node = nxt
+                    break
+                if next_node is None:
+                    if path_filter.accept(path, None, state):
+                        if not global_filter.accept(path):
+                            return
+                        yield path
+                    break
+                next_state = (
+                    state_tracker.state_update(state, node, next_node)
+                    if state_tracker
+                    else None
+                )
+                path = [*path, next_node]
+                node = next_node
+                state = next_state
+
+    def dfs_iterative(
+        self,
+        start_nodes: Iterable[NodeT],
+        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
+        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
+        N: int = 100,
+        T: int = 1,
+        shuffle: bool = True,
+        max_only: bool = True,
+    ) -> Iterator[list[NodeT]]:
+        starts = list(start_nodes)
+        uncovered = set(starts)
+        if not starts or N <= 0 or T <= 0:
+            return
+        for _ in range(T):
+            if not uncovered:
+                break
+            remaining = N
+            while remaining > 0 and uncovered:
+                candidates = list(uncovered)
+                if shuffle:
+                    import random
+
+                    random.shuffle(candidates)
+                start = candidates[0]
+                remaining -= 1
+                for path in self.dfs_v2(
+                    start_nodes=[start],
+                    neighbor_filter=neighbor_filter,
+                    path_filter=path_filter,
+                    global_filter=global_filter,
+                    state_tracker=state_tracker,
+                    max_only=max_only,
+                ):
+                    uncovered -= set(path)
+                    yield path
+                if not uncovered:
+                    break
+    def dfs_max_only(
+        self,
+        start_nodes: Iterable[NodeT],
+        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
+        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
+    ) -> Iterator[list[NodeT]]:
+        for start in start_nodes:
+            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
+            node = start
+            path = [start]
+            while True:
+                neighbors = apply_neighbor_filter(
+                    neighbor_filter, node, self.graph.neighbors(node)
+                )
+                next_node: NodeT | None = None
+                for nxt in neighbors:
+                    if nxt in path:
+                        continue
+                    if not path_filter.accept(path, nxt, state):
+                        continue
+                    next_node = nxt
+                    break
+                if next_node is None:
+                    if path_filter.accept(path, None, state):
+                        if not global_filter.accept(path):
+                            return
+                        yield path
+                    break
+                next_state = (
+                    state_tracker.state_update(state, node, next_node)
+                    if state_tracker
+                    else None
+                )
+                path = [*path, next_node]
+                node = next_node
+                state = next_state
+
     def dfs(
         self,
         start_nodes: Iterable[NodeT],
