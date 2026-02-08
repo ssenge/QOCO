@@ -359,6 +359,17 @@ class KeepEmitFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
 
 
 @dataclass(frozen=True)
+class DeadEndEmitFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
+    """Emit filter that only accepts paths at dead ends (when nxt is None).
+    
+    This ensures only final/maximal paths are emitted, not intermediate sub-paths.
+    """
+    
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        return nxt is None
+
+
+@dataclass(frozen=True)
 class PathPredicateFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
     allow_step: Callable[[list[NodeT], NodeT | None, StateT | None], bool] = lambda _path, _nxt, _state: True
     allow_path: Callable[[list[NodeT], StateT | None], bool] = lambda _path, _state: True
@@ -377,7 +388,7 @@ class GraphTraversal:
         state_tracker: PathStateTracker[NodeT, StateT],
         neighbor_filter: Filter[tuple[NodeT, NodeT]] = AcceptFilter(),
         path_stop_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-        path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] | None = None,
+        path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = DeadEndEmitFilter(),
         global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
         greedy_only: bool = True,
     ) -> list[list[NodeT]]:
@@ -401,8 +412,6 @@ class GraphTraversal:
             A list of paths.
         """
         results: list[list[NodeT]] = []
-        emit_filter = path_emit_filter
-        emit_filter_or_stop = path_emit_filter or path_stop_filter
 
         @tailrec
         def _rec(stack: list[tuple[NodeT, list[NodeT], StateT]]):
@@ -410,30 +419,34 @@ class GraphTraversal:
                 return results
             node, path, state = stack.pop()
             if greedy_only:
-                if emit_filter is not None and emit_filter.accept(path, None, state):
-                    if not global_filter.accept(path):
-                        return results
-                    results.append(path)
+                # Find valid next node (exploration decision)
                 next_node: NodeT | None = None
                 for nxt in apply_neighbor_filter(neighbor_filter, node, self.graph.neighbors(node)):
                     if nxt in path or not path_stop_filter.accept(path, nxt, state):
                         continue
                     next_node = nxt
                     break
+                
+                # Phase 1: Intermediate emission (if we have a valid next node)
+                if next_node is not None:
+                    if path_emit_filter.accept(path, next_node, state):
+                        if global_filter.accept(path):
+                            results.append(path)
+                
+                # Phase 2: Final emission (at dead end)
                 if next_node is None:
-                    if emit_filter is None:
-                        if not path_stop_filter.accept(path, None, state):
-                            return results
-                    elif not emit_filter.accept(path, None, state):
+                    if not path_emit_filter.accept(path, None, state):
                         return results
                     if not global_filter.accept(path):
                         return results
                     results.append(path)
                     return results
+                
+                # Continue exploring
                 next_state = state_tracker.state_update(state, node, next_node)
                 stack.append((next_node, [*path, next_node], next_state))
                 return _rec(stack)
-            if emit_filter_or_stop.accept(path, None, state):
+            if path_emit_filter.accept(path, None, state):
                 if not global_filter.accept(path):
                     return results
                 results.append(path)
@@ -455,7 +468,7 @@ class GraphTraversal:
         state_tracker: PathStateTracker[NodeT, StateT],
         neighbor_filter: Filter[tuple[NodeT, NodeT]] = AcceptFilter(),
         path_stop_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-        path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] | None = None,
+        path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = DeadEndEmitFilter(),
         global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
         N: int = 1,
         T: int = 1,
@@ -467,7 +480,6 @@ class GraphTraversal:
         """
         Multi DFS: runs N-times DFS from (shuffeled) unvisited nodes, resets visited nodes and repeats T times. This helps to generate more diverse paths. In total N*T DFS iterations are performed and hence N*T paths are generated.
         """
-        path_emit_filter = path_emit_filter or path_stop_filter
         rng = rng or random
 
         for _ in range(T):
