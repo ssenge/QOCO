@@ -60,6 +60,7 @@ class OptimizationResult(Generic[SolutionT, RunT, SummaryT]):
     solution: SolutionT
     run: RunT
     problem: SummaryT
+    metadata: dict[str, Any] | None = None
 
     def write(self, path: str | Path) -> None:
         target = Path(path)

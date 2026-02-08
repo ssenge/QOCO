@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Generic, TypeVar
@@ -79,6 +79,16 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         ctx = self.builder(ctx)
         self._print_step(f"*** Starting Optimizer at {self._timestamp()}")
         ctx["result"] = self.optimizer.optimize(ctx["model"])
+        # Override problem summary from instance (optimizer receives model, not Problem)
+        problem_summary = ctx["instance"].summary()
+        # Extract model stats (num_vars, num_constraints) from the model
+        if hasattr(ctx["model"], "nvariables") and hasattr(ctx["model"], "nconstraints"):
+            problem_summary = replace(
+                problem_summary,
+                num_vars=ctx["model"].nvariables(),
+                num_constraints=ctx["model"].nconstraints(),
+            )
+        ctx["result"] = replace(ctx["result"], problem=problem_summary)
         self._print_step(f"*** Postproc at {self._timestamp()}")
         ctx = self.postproc(ctx)
         if self.log_results:

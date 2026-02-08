@@ -5,6 +5,7 @@ Uses Pyomo's gurobi interface.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Generic, Optional
 
 import pyomo.environ as pyo
@@ -49,7 +50,9 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
         if self.log_file is not None:
             solver.options["LogFile"] = self.log_file
 
+        optimizer_timestamp_start = datetime.now(timezone.utc)
         result = solver.solve(model, tee=self.verbose)
+        optimizer_timestamp_end = datetime.now(timezone.utc)
 
         tc = result.solver.termination_condition
         if tc == TerminationCondition.optimal:
@@ -80,4 +83,8 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
             objective=obj_val,
             var_values=var_values,
         )
-        return solution, OptimizerRun(name=self.name)
+        return solution, OptimizerRun(
+            name=self.name,
+            optimizer_timestamp_start=optimizer_timestamp_start,
+            optimizer_timestamp_end=optimizer_timestamp_end,
+        )
