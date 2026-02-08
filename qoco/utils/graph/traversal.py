@@ -379,9 +379,27 @@ class GraphTraversal:
         path_stop_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
         path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] | None = None,
         global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
-        greedy_only: bool = False,
+        greedy_only: bool = True,
     ) -> list[list[NodeT]]:
+        """ DFS traversal with configurable exploration (neighbor_filter, path_stop_filter), emission (path_emit_filter), and global (global_filter) filters.
 
+        Exploration: decide which neighbors to explore next.
+        Emission: decide when to emit a path.
+        Global: decide when to stop the traversal.
+        Greedy only: toggles whether to explore only the first neighbor that satisfies the path_stop_filter or all neighbors.
+
+        Args:
+            start_nodes: the nodes to start the traversal from.
+            state_tracker: the state tracker to use for the traversal.
+            neighbor_filter: the filter to use for the neighbors.
+            path_stop_filter: the filter to use for the path.
+            path_emit_filter: the filter to use for the path.
+            global_filter: the filter to use for the global.
+            greedy_only: whether to only explore the first neighbor that satisfies the path_stop_filter.
+
+        Returns:
+            A list of paths.
+        """
         results: list[list[NodeT]] = []
         emit_filter = path_emit_filter
         emit_filter_or_stop = path_emit_filter or path_stop_filter
@@ -431,7 +449,7 @@ class GraphTraversal:
         return results
 
 
-    def dfs_iterative(
+    def multi_dfs(
         self,
         start_nodes: list[NodeT],
         state_tracker: PathStateTracker[NodeT, StateT],
@@ -446,12 +464,14 @@ class GraphTraversal:
         greedy_only: bool = True,
         rng: random.Random | None = None,
     ) -> Iterator[list[NodeT]]:
-        unvisited = set(start_nodes)
+        """
+        Multi DFS: runs N-times DFS from (shuffeled) unvisited nodes, resets visited nodes and repeats T times. This helps to generate more diverse paths. In total N*T DFS iterations are performed and hence N*T paths are generated.
+        """
         path_emit_filter = path_emit_filter or path_stop_filter
         rng = rng or random
 
         for _ in range(T):
-            if not unvisited:
+            if not (unvisited := set(start_nodes)):
                 break
             for _ in range(N):
                 if not unvisited:
@@ -471,4 +491,4 @@ class GraphTraversal:
                 ):
                     if cover_visited:
                         unvisited -= set(path)
-                    yield path
+                    return path
