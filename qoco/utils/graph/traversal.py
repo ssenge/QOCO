@@ -491,4 +491,4 @@ class GraphTraversal:
                 ):
                     if cover_visited:
                         unvisited -= set(path)
-                    return path
+                    yield path
