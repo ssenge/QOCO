@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Generic, TypeVar
 
+from rich.console import Console
 from qoco.core.optimizer import Optimizer
 from qoco.core.solution import OptimizerRun, ProblemSummary, Solution
 from qoco.preproc import Collapser, CollapseMapping, Reducer
@@ -20,23 +21,25 @@ Map = TypeVar("Map", bound=CollapseMapping)
 @dataclass
 class OptimizerPipeline(Generic[P, M, R, Map]):
     init: Callable[[], P]
-    reducers: list[Reducer[P]]
+    reducer: Reducer[P] | list[Reducer[P]]
     collapsers: list[Collapser[P, Map]]
-    preproc: Callable[[PipelineContext], None]
-    builder: Callable[[PipelineContext], M]
+    preproc: Callable[[PipelineContext], PipelineContext]
+    builder: Callable[[PipelineContext], PipelineContext]
     optimizer: Optimizer[M, M, Solution, OptimizerRun, ProblemSummary]
-    postproc: Callable[[PipelineContext], None]
+    postproc: Callable[[PipelineContext], PipelineContext]
     name: str = "unnamed"
     print_steps: bool = False
     log_results: bool = False
     log_dir: str | Path = "logs/optimizer_results"
+
+    _console = Console()
 
     def _timestamp(self) -> str:
         return datetime.now().isoformat(sep=" ", timespec="seconds")
 
     def _print_step(self, message: str) -> None:
         if self.print_steps:
-            print(message)
+            self._console.print(message, style="blue")
 
     def _result_log_path(self) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -49,17 +52,18 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
     def run(self) -> PipelineContext:
         ctx = PipelineContext()
         if self.print_steps:
-            print(f"Starting pipeline {self.name}...")
-            print(f"\tInit at {self._timestamp()}")
+            self._print_step(f"*** Starting pipeline {self.name}...")
+            self._print_step(f" - Init at {self._timestamp()}")
         self._load(ctx)
 
-        for reducer in self.reducers:
-            self._print_step(f"\tReducer {type(reducer).__name__} at {self._timestamp()}")
+        reducers = self.reducer if isinstance(self.reducer, list) else [self.reducer]
+        for reducer in reducers:
+            self._print_step(f" - Reducer {type(reducer).__name__} at {self._timestamp()}")
             ctx["instance"] = reducer.convert(ctx["instance"])
 
         collapse_mapping = None
         for collapser in self.collapsers:
-            self._print_step(f"\tCollapser {type(collapser).__name__} at {self._timestamp()}")
+            self._print_step(f" - Collapser {type(collapser).__name__} at {self._timestamp()}")
             collapsed = collapser.convert(ctx["instance"])
             ctx["instance"] = collapsed.problem
             if collapse_mapping is None:
@@ -69,14 +73,14 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         if collapse_mapping is not None:
             ctx["collapse_mapping"] = collapse_mapping
 
-        self._print_step(f"\tPreproc at {self._timestamp()}")
-        self.preproc(ctx)
-        self._print_step(f"\tBuilder at {self._timestamp()}")
-        ctx["model"] = self.builder(ctx)
-        self._print_step(f"\tOptimizer at {self._timestamp()}")
+        self._print_step(f"*** Preproc at {self._timestamp()}")
+        ctx = self.preproc(ctx)
+        self._print_step(f"*** Model Builder at {self._timestamp()}")
+        ctx = self.builder(ctx)
+        self._print_step(f"*** Starting Optimizer at {self._timestamp()}")
         ctx["result"] = self.optimizer.optimize(ctx["model"])
-        self._print_step(f"\tPostproc at {self._timestamp()}")
-        self.postproc(ctx)
+        self._print_step(f"*** Postproc at {self._timestamp()}")
+        ctx = self.postproc(ctx)
         if self.log_results:
             ctx["result"].write(self._result_log_path())
         return ctx

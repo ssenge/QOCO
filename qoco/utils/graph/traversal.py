@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import reduce
+import random
 from typing import Callable, Generic, Iterable, Iterator, TypeVar, Self
+
+from tailrec import tailrec
 
 import networkx as nx
 
@@ -26,6 +29,12 @@ class Filter(Generic[ItemT]):
 
     def compose(self, other: Self) -> Self: 
         return _AndFilter(self, other)  # This is sofar AND-only composition. TODO: add OR-composition.
+
+    def __mul__(self, other: Self) -> Self:
+        return self.compose(other)
+
+    def __or__(self, other: Self) -> Self:
+        return _OrFilter(self, other)
 
 
 class AcceptFilter(Filter[ItemT]):
@@ -79,6 +88,50 @@ class MaxItemFilter(UnaryFilter[ItemT]):
 
 
 @dataclass
+class MinLengthFilter(UnaryFilter[list[ItemT]]):
+    min_len: int
+
+    def accept(self, item: list[ItemT]) -> bool:
+        return len(item) >= self.min_len
+
+
+@dataclass
+class SkipFilter(UnaryFilter[list[ItemT]]):
+    step: int
+    _count: int = field(default=0, init=False)
+
+    def accept(self, item: list[ItemT]) -> bool:
+        self._count += 1
+        return (self._count % self.step) == 1
+
+
+@dataclass
+class RandomSkipFilter(UnaryFilter[list[ItemT]]):
+    probability: float
+    rng: random.Random
+
+    def accept(self, item: list[ItemT]) -> bool:
+        return self.rng.random() < self.probability
+
+
+class SubpathExpander:
+    @staticmethod
+    def expand(
+        path: list[NodeT],
+        subpath_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        start_only: bool = False,
+    ) -> list[list[NodeT]]:
+        subpaths: list[list[NodeT]] = []
+        start_range = range(1) if start_only else range(len(path))
+        for start in start_range:
+            for end in range(start + 1, len(path) + 1):
+                subpath = path[start:end]
+                if subpath_filter.accept(subpath):
+                    subpaths.append(subpath)
+        return subpaths
+
+
+@dataclass
 class _AndFilter(Filter[ItemT]):
     left: Filter[ItemT]
     right: Filter[ItemT]
@@ -86,6 +139,32 @@ class _AndFilter(Filter[ItemT]):
     def accept(self, *args) -> bool:
         return self.left.accept(*args) and self.right.accept(*args)
 
+    def order(self, node, neighbors):
+        ordered = neighbors
+        if hasattr(self.left, "order"):
+            ordered = self.left.order(node, ordered)
+        if hasattr(self.right, "order"):
+            ordered = self.right.order(node, ordered)
+        return ordered
+
+
+
+
+@dataclass
+class _OrFilter(Filter[ItemT]):
+    left: Filter[ItemT]
+    right: Filter[ItemT]
+
+    def accept(self, *args) -> bool:
+        return self.left.accept(*args) or self.right.accept(*args)
+
+    def order(self, node, neighbors):
+        ordered = neighbors
+        if hasattr(self.left, "order"):
+            ordered = self.left.order(node, ordered)
+        if hasattr(self.right, "order"):
+            ordered = self.right.order(node, ordered)
+        return ordered
 
 
 
@@ -101,14 +180,21 @@ def prepare_filter(filter_obj: Filter, *args, **kwargs) -> None:
         prepare_filter(filter_obj.left, *args, **kwargs)
         prepare_filter(filter_obj.right, *args, **kwargs)
         return
+    if isinstance(filter_obj, _OrFilter):
+        prepare_filter(filter_obj.left, *args, **kwargs)
+        prepare_filter(filter_obj.right, *args, **kwargs)
+        return
 
 
 def apply_neighbor_filter(
-    filter_obj: BinaryFilter[NodeT, NodeT],
+    filter_obj: Filter[tuple[NodeT, NodeT]],
     node: NodeT,
     neighbors: Iterable[NodeT],
 ) -> list[NodeT]:
-    return [nxt for nxt in neighbors if filter_obj.accept(node, nxt)]
+    ordered = list(neighbors)
+    if hasattr(filter_obj, "order"):
+        ordered = filter_obj.order(node, ordered)
+    return [nxt for nxt in ordered if filter_obj.accept(node, nxt)]
 
 
 @dataclass(frozen=True)
@@ -250,231 +336,139 @@ class MinNodeAttrSumFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | Non
         return total >= float(self.min_total)
 
 
-@dataclass(frozen=True)
-class PathPredicateFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
-    allow_step: Callable[[list[NodeT], NodeT | None, StateT | None], bool]
-    allow_path: Callable[[list[NodeT], StateT | None], bool] | None = None
+@dataclass
+class MinPathLengthEmitFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
+    min_len: int
 
     def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
-        if nxt is None:
-            if self.allow_path is None:
-                return True
-            return bool(self.allow_path(path, state))
-        return bool(self.allow_step(path, nxt, state))
+        if nxt is not None:
+            return True
+        return len(path) >= self.min_len
+
+
+@dataclass
+class KeepEmitFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
+    step: int
+    _count: int = field(default=0, init=False)
+
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        if nxt is not None:
+            return True
+        self._count += 1
+        return (self._count % self.step) == 1
+
+
+@dataclass(frozen=True)
+class PathPredicateFilter(TernaryFilter[list[NodeT], NodeT | None, StateT | None]):
+    allow_step: Callable[[list[NodeT], NodeT | None, StateT | None], bool] = lambda _path, _nxt, _state: True
+    allow_path: Callable[[list[NodeT], StateT | None], bool] = lambda _path, _state: True
+
+    def accept(self, path: list[NodeT], nxt: NodeT | None, state: StateT | None) -> bool:
+        return self.allow_path(path, state) if nxt is None else self.allow_step(path, nxt, state)
 
 
 @dataclass(frozen=True)
 class GraphTraversal:
     graph: nx.DiGraph
-
-    def dfs_v2(
-        self,
-        start_nodes: Iterable[NodeT],
-        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
-        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
-        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
-        max_only: bool = False,
-    ) -> Iterator[list[NodeT]]:
-        if not max_only:
-            for start in start_nodes:
-                state: StateT | None = state_tracker.state_init(start) if state_tracker else None
-                stack: list[tuple[NodeT, list[NodeT], StateT | None]] = [(start, [start], state)]
-                while stack:
-                    node, path, state = stack.pop()
-                    if path_filter.accept(path, None, state):
-                        if not global_filter.accept(path):
-                            return
-                        yield path
-                    for nxt in apply_neighbor_filter(
-                        neighbor_filter, node, self.graph.neighbors(node)
-                    ):
-                        if nxt in path:
-                            continue
-                        if not path_filter.accept(path, nxt, state):
-                            continue
-                        next_state = (
-                            state_tracker.state_update(state, node, nxt)
-                            if state_tracker
-                            else None
-                        )
-                        stack.append((nxt, [*path, nxt], next_state))
-            return
-        for start in start_nodes:
-            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
-            node = start
-            path = [start]
-            while True:
-                neighbors = apply_neighbor_filter(
-                    neighbor_filter, node, self.graph.neighbors(node)
-                )
-                next_node: NodeT | None = None
-                for nxt in neighbors:
-                    if nxt in path:
-                        continue
-                    if not path_filter.accept(path, nxt, state):
-                        continue
-                    next_node = nxt
-                    break
-                if next_node is None:
-                    if path_filter.accept(path, None, state):
-                        if not global_filter.accept(path):
-                            return
-                        yield path
-                    break
-                next_state = (
-                    state_tracker.state_update(state, node, next_node)
-                    if state_tracker
-                    else None
-                )
-                path = [*path, next_node]
-                node = next_node
-                state = next_state
-
-    def dfs_iterative(
-        self,
-        start_nodes: Iterable[NodeT],
-        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
-        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
-        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
-        N: int = 100,
-        T: int = 1,
-        shuffle: bool = True,
-        max_only: bool = True,
-    ) -> Iterator[list[NodeT]]:
-        starts = list(start_nodes)
-        uncovered = set(starts)
-        if not starts or N <= 0 or T <= 0:
-            return
-        for _ in range(T):
-            if not uncovered:
-                break
-            remaining = N
-            while remaining > 0 and uncovered:
-                candidates = list(uncovered)
-                if shuffle:
-                    import random
-
-                    random.shuffle(candidates)
-                start = candidates[0]
-                remaining -= 1
-                for path in self.dfs_v2(
-                    start_nodes=[start],
-                    neighbor_filter=neighbor_filter,
-                    path_filter=path_filter,
-                    global_filter=global_filter,
-                    state_tracker=state_tracker,
-                    max_only=max_only,
-                ):
-                    uncovered -= set(path)
-                    yield path
-                if not uncovered:
-                    break
-    def dfs_max_only(
-        self,
-        start_nodes: Iterable[NodeT],
-        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
-        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
-        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
-    ) -> Iterator[list[NodeT]]:
-        for start in start_nodes:
-            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
-            node = start
-            path = [start]
-            while True:
-                neighbors = apply_neighbor_filter(
-                    neighbor_filter, node, self.graph.neighbors(node)
-                )
-                next_node: NodeT | None = None
-                for nxt in neighbors:
-                    if nxt in path:
-                        continue
-                    if not path_filter.accept(path, nxt, state):
-                        continue
-                    next_node = nxt
-                    break
-                if next_node is None:
-                    if path_filter.accept(path, None, state):
-                        if not global_filter.accept(path):
-                            return
-                        yield path
-                    break
-                next_state = (
-                    state_tracker.state_update(state, node, next_node)
-                    if state_tracker
-                    else None
-                )
-                path = [*path, next_node]
-                node = next_node
-                state = next_state
-
+    
     def dfs(
         self,
         start_nodes: Iterable[NodeT],
-        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
-        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        state_tracker: PathStateTracker[NodeT, StateT],
+        neighbor_filter: Filter[tuple[NodeT, NodeT]] = AcceptFilter(),
+        path_stop_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] | None = None,
         global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
-        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
-    ) -> Iterator[list[NodeT]]:
-        for start in start_nodes:
-            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
-            stack: list[tuple[NodeT, list[NodeT], StateT | None]] = [(start, [start], state)]
-            while stack:
-                node, path, state = stack.pop()
-                if path_filter.accept(path, None, state):
+        greedy_only: bool = False,
+    ) -> list[list[NodeT]]:
+
+        results: list[list[NodeT]] = []
+        emit_filter = path_emit_filter
+        emit_filter_or_stop = path_emit_filter or path_stop_filter
+
+        @tailrec
+        def _rec(stack: list[tuple[NodeT, list[NodeT], StateT]]):
+            if not stack:
+                return results
+            node, path, state = stack.pop()
+            if greedy_only:
+                if emit_filter is not None and emit_filter.accept(path, None, state):
                     if not global_filter.accept(path):
-                        return
-                    yield path
+                        return results
+                    results.append(path)
+                next_node: NodeT | None = None
                 for nxt in apply_neighbor_filter(neighbor_filter, node, self.graph.neighbors(node)):
-                    if nxt in path:
+                    if nxt in path or not path_stop_filter.accept(path, nxt, state):
                         continue
-                    if not path_filter.accept(path, nxt, state):
-                        continue
-                    next_state = (
-                        state_tracker.state_update(state, node, nxt) if state_tracker else None
-                    )
-                    stack.append((nxt, [*path, nxt], next_state))
-
-    def bfs(
-        self,
-        start_nodes: Iterable[NodeT],
-        neighbor_filter: BinaryFilter[NodeT, NodeT] = AcceptFilter(),
-        path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
-        state_tracker: PathStateTracker[NodeT, StateT] | None = None,
-    ) -> Iterator[list[NodeT]]:
-        queue: list[tuple[NodeT, list[NodeT], StateT | None]] = []
-        for start in start_nodes:
-            state: StateT | None = state_tracker.state_init(start) if state_tracker else None
-            queue.append((start, [start], state))
-        while queue:
-            node, path, state = queue.pop(0)
-            if path_filter.accept(path, None, state):
+                    next_node = nxt
+                    break
+                if next_node is None:
+                    if emit_filter is None:
+                        if not path_stop_filter.accept(path, None, state):
+                            return results
+                    elif not emit_filter.accept(path, None, state):
+                        return results
+                    if not global_filter.accept(path):
+                        return results
+                    results.append(path)
+                    return results
+                next_state = state_tracker.state_update(state, node, next_node)
+                stack.append((next_node, [*path, next_node], next_state))
+                return _rec(stack)
+            if emit_filter_or_stop.accept(path, None, state):
                 if not global_filter.accept(path):
-                    return
-                yield path
+                    return results
+                results.append(path)
             for nxt in apply_neighbor_filter(neighbor_filter, node, self.graph.neighbors(node)):
-                if nxt in path:
+                if nxt in path or not path_stop_filter.accept(path, nxt, state):
                     continue
-                if not path_filter.accept(path, nxt, state):
-                    continue
-                next_state = (
-                    state_tracker.state_update(state, node, nxt) if state_tracker else None
-                )
-                queue.append((nxt, [*path, nxt], next_state))
+                next_state = state_tracker.state_update(state, node, nxt)
+                stack.append((nxt, [*path, nxt], next_state))
+            return _rec(stack)
+
+        for start in start_nodes:
+            _rec([(start, [start], state_tracker.state_init(start))])
+        return results
 
 
-def prune_graph_by_paths(
-    graph: nx.DiGraph,
-    start_nodes: Iterable[NodeT],
-    path_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
-    state_tracker: PathStateTracker[NodeT, StateT] | None = None,
-) -> nx.DiGraph:
-    used_edges: set[tuple[NodeT, NodeT]] = set()
-    for path in GraphTraversal(graph).dfs(
-        start_nodes, path_filter=path_filter, state_tracker=state_tracker
-    ):
-        used_edges.update(zip(path, path[1:]))
-    return graph.edge_subgraph(used_edges).copy()
+    def dfs_iterative(
+        self,
+        start_nodes: list[NodeT],
+        state_tracker: PathStateTracker[NodeT, StateT],
+        neighbor_filter: Filter[tuple[NodeT, NodeT]] = AcceptFilter(),
+        path_stop_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] = AcceptFilter(),
+        path_emit_filter: TernaryFilter[list[NodeT], NodeT | None, StateT | None] | None = None,
+        global_filter: UnaryFilter[list[NodeT]] = AcceptFilter(),
+        N: int = 1,
+        T: int = 1,
+        shuffle: bool = True,
+        cover_visited: bool = True,
+        greedy_only: bool = True,
+        rng: random.Random | None = None,
+    ) -> Iterator[list[NodeT]]:
+        unvisited = set(start_nodes)
+        path_emit_filter = path_emit_filter or path_stop_filter
+        rng = rng or random
+
+        for _ in range(T):
+            if not unvisited:
+                break
+            for _ in range(N):
+                if not unvisited:
+                    break
+                candidates = list(unvisited)
+                if shuffle:
+                    rng.shuffle(candidates)
+                start = candidates[0]
+                for path in self.dfs(
+                    start_nodes=[start],
+                    state_tracker=state_tracker,
+                    neighbor_filter=neighbor_filter,
+                    path_stop_filter=path_stop_filter,
+                    path_emit_filter=path_emit_filter,
+                    global_filter=global_filter,
+                    greedy_only=greedy_only,
+                ):
+                    if cover_visited:
+                        unvisited -= set(path)
+                    yield path

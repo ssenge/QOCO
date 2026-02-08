@@ -14,6 +14,18 @@ S = TypeVar("S")
 class Reducer(Converter[P, P], ABC):
     """Exact subsetting of a problem (same type in/out)."""
 
+    def __mul__(self, other: "Reducer[P]") -> "Reducer[P]":
+        return ComposedReducer(left=self, right=other)
+
+
+@dataclass
+class ComposedReducer(Reducer[P]):
+    left: Reducer[P]
+    right: Reducer[P]
+
+    def convert(self, problem: P) -> P:
+        return self.right.convert(self.left.convert(problem))
+
 
 @dataclass(frozen=True)
 class CollapseMapping(Generic[S]):
