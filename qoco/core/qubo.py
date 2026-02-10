@@ -42,6 +42,12 @@ class QUBO:
     def n_vars(self) -> int:
         return int(self.Q.shape[0])
 
+    def __str__(self) -> str:
+        q_shape = getattr(self.Q, "shape", None)
+        vm = int(len(self.var_map)) if self.var_map is not None else 0
+        meta = "yes" if self.metadata is not None else "no"
+        return f"QUBO(n_vars={self.n_vars}, Q_shape={q_shape}, offset={self.offset}, var_map={vm}, metadata={meta})"
+
 
 @dataclass(frozen=True)
 class QuboCoupling:
