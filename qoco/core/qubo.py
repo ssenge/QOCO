@@ -42,6 +42,17 @@ class QUBO:
     def n_vars(self) -> int:
         return int(self.Q.shape[0])
 
+    # Pyomo-compatible stats helpers (used by the pipeline for logging).
+    def nvariables(self) -> int:
+        return int(self.n_vars)
+
+    def nconstraints(self) -> int:
+        # QUBO is unconstrained by definition.
+        return 0
+
+    def nobjectives(self) -> int:
+        return 1
+
     def __str__(self) -> str:
         q_shape = getattr(self.Q, "shape", None)
         vm = int(len(self.var_map)) if self.var_map is not None else 0

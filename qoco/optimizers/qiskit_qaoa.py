@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Generic, Optional
 
 import numpy as np
@@ -18,6 +19,7 @@ from qoco.core.optimizer import Optimizer, P
 from qoco.core.qubo import QUBO
 from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
+from qoco.postproc.qubo_postproc import NoOpPostProcessor, PostProcessor, Sample, SampleBatch
 
 
 def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
@@ -34,6 +36,53 @@ def _bitstring_to_x(bitstring: str, n: int) -> np.ndarray:
     if len(s) != int(n):
         raise ValueError("bitstring length mismatch")
     return np.array([1 if ch == "1" else 0 for ch in s], dtype=int)
+
+
+def _to_bitstring_msb(*, value: int, n: int) -> str:
+    return format(int(value), f"0{int(n)}b")
+
+
+def _normalize_bitstring(*, bitstring: Any, n: int) -> str:
+    try:
+        value = int(bitstring)
+    except Exception:
+        s = str(bitstring).strip()
+        if s.startswith("0b"):
+            s = s[2:]
+        s = "".join(ch for ch in s if ch in ("0", "1"))
+        if not s:
+            raise ValueError("cannot parse bitstring")
+        if len(s) < int(n):
+            s = s.zfill(int(n))
+        if len(s) > int(n):
+            s = s[-int(n) :]
+        return s
+    return _to_bitstring_msb(value=value, n=int(n))
+
+
+def _sample_batch_from_qaoa_result(*, result: Any, n: int) -> SampleBatch:
+    eigenstate = getattr(result, "eigenstate", None)
+    if eigenstate is not None:
+        binary_probabilities = getattr(eigenstate, "binary_probabilities", None)
+        if callable(binary_probabilities):
+            samples = [
+                Sample(_normalize_bitstring(bitstring=k, n=int(n)), weight=float(w))
+                for k, w in binary_probabilities().items()
+            ]
+            if samples:
+                return SampleBatch(n=int(n), samples=samples, bit_order="qiskit")
+
+        items = getattr(eigenstate, "items", None)
+        if callable(items):
+            samples = [Sample(_to_bitstring_msb(value=int(k), n=int(n)), weight=float(w)) for k, w in eigenstate.items()]
+            if samples:
+                return SampleBatch(n=int(n), samples=samples, bit_order="qiskit")
+
+    bm = getattr(result, "best_measurement", None)
+    if bm is None:
+        raise ValueError("QAOA result has no eigenstate and no best_measurement")
+    bitstring = _normalize_bitstring(bitstring=bm["bitstring"], n=int(n))
+    return SampleBatch(n=int(n), samples=[Sample(bitstring, weight=1.0)], bit_order="qiskit")
 
 
 _STANDARD_GATE_NAMES = set(get_standard_gate_name_mapping().keys())
@@ -79,6 +128,7 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
     initial_point: list[float] | None = None
     qaoa_kwargs: dict[str, Any] = field(default_factory=dict)
     cost_scale: float | None = None
+    postproc: PostProcessor = field(default_factory=NoOpPostProcessor)
 
     def encode_qubo(self, qubo: QUBO) -> tuple[Any, float]:
         if self.use_quadratic_program:
@@ -141,14 +191,14 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
 
         qaoa = self.make_qaoa()
 
+        optimizer_timestamp_start = datetime.now(timezone.utc)
         res = qaoa.compute_minimum_eigenvalue(op)
-        bm = res.best_measurement
-        bitstring = str(bm["bitstring"])
-        value = float(np.real(bm["value"]))
-
+        optimizer_timestamp_end = datetime.now(timezone.utc)
         n = int(qubo.n_vars)
-        x = _bitstring_to_x(bitstring, n)
-        obj = float(value + float(offset))
+        batch = _sample_batch_from_qaoa_result(result=res, n=n)
+        post = self.postproc.run(qubo=qubo, batch=batch)
+        x = np.asarray(post.x, dtype=int).reshape(-1)
+        obj = float(post.objective)
 
         names = _names_by_index(dict(qubo.var_map), n)
         var_values = {names[i]: int(x[i]) for i in range(n)}
@@ -160,5 +210,9 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
             var_arrays={"x": x},
             var_array_index={"x": list(names)},
         )
-        return solution, OptimizerRun(name=self.name)
+        return solution, OptimizerRun(
+            name=self.name,
+            optimizer_timestamp_start=optimizer_timestamp_start,
+            optimizer_timestamp_end=optimizer_timestamp_end,
+        )
 

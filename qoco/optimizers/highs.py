@@ -5,6 +5,7 @@ Uses Pyomo's appsi_highs interface to the HiGHS solver.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Generic, Optional
 
 import pyomo.environ as pyo
@@ -48,8 +49,9 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Optim
         if self.mip_gap is not None:
             solver.options['mip_rel_gap'] = self.mip_gap
         
-        # Solve
+        optimizer_timestamp_start = datetime.now(timezone.utc)
         result = solver.solve(model, tee=self.verbose)
+        optimizer_timestamp_end = datetime.now(timezone.utc)
         
         # Map termination condition to Status
         tc = result.solver.termination_condition
@@ -84,4 +86,8 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Optim
             objective=obj_val,
             var_values=var_values,
         )
-        return solution, OptimizerRun(name=self.name)
+        return solution, OptimizerRun(
+            name=self.name,
+            optimizer_timestamp_start=optimizer_timestamp_start,
+            optimizer_timestamp_end=optimizer_timestamp_end,
+        )

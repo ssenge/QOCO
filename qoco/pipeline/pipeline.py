@@ -160,13 +160,13 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         t_opt = time.perf_counter() - t0
         # Override problem summary from instance (optimizer receives model, not Problem)
         problem_summary = ctx["instance"].summary()
-        # Extract model stats (num_vars, num_constraints) from the model
-        if hasattr(ctx["model"], "nvariables") and hasattr(ctx["model"], "nconstraints"):
-            problem_summary = replace(
-                problem_summary,
-                num_vars=ctx["model"].nvariables(),
-                num_constraints=ctx["model"].nconstraints(),
-            )
+        # Extract model stats. We assume models implement Pyomo-like `nvariables()`/`nconstraints()`.
+        # (QUBO implements these too.)
+        problem_summary = replace(
+            problem_summary,
+            num_vars=int(ctx["model"].nvariables()),
+            num_constraints=int(ctx["model"].nconstraints()),
+        )
         ctx["result"] = replace(ctx["result"], problem=problem_summary)
 
         # Optional oracle run (same model); store result or None in ctx.

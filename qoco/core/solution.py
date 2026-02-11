@@ -4,6 +4,7 @@ Solution class for optimization results.
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import json
 from pathlib import Path
 from enum import Enum, auto
 from typing import Any, Dict, Generic, Iterable, TypeVar
@@ -63,8 +64,50 @@ class OptimizationResult(Generic[SolutionT, RunT, SummaryT]):
     metadata: dict[str, Any] | None = None
 
     def write(self, path: str | Path) -> None:
+        def _normalize(obj: Any) -> Any:
+            """Make values JSON-serializable for log output.
+
+            Logging should be robust even when solutions/metadata contain numpy objects.
+            """
+            if obj is None or isinstance(obj, (str, int, float, bool)):
+                return obj
+            if isinstance(obj, datetime):
+                # ISO 8601 (pydantic uses this convention too).
+                return obj.isoformat()
+            if isinstance(obj, Path):
+                return str(obj)
+            if isinstance(obj, dict):
+                return {str(k): _normalize(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_normalize(v) for v in obj]
+            if isinstance(obj, Enum):
+                return obj.name
+
+            # Numpy support (optional).
+            try:
+                import numpy as _np  # type: ignore
+
+                if isinstance(obj, _np.ndarray):
+                    return obj.tolist()
+                if isinstance(obj, _np.generic):
+                    return obj.item()
+            except Exception:
+                pass
+
+            # Last resort: stringify to avoid crashing long experiments.
+            return str(obj)
+
         target = Path(path)
-        payload = TypeAdapter(type(self)).dump_json(self).decode("utf-8")
+        # Write in a readability-first order: problem/run first, then solution (var_values), then metadata.
+        # JSON object order is not semantically relevant, but it matters a lot for scanning large `.jsonl` logs.
+        dumped = TypeAdapter(type(self)).dump_python(self, mode="python")
+        ordered = {
+            "problem": dumped.get("problem"),
+            "run": dumped.get("run"),
+            "solution": dumped.get("solution"),
+            "metadata": dumped.get("metadata"),
+        }
+        payload = json.dumps(_normalize(ordered), ensure_ascii=False, separators=(",", ":"))
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
             handle.write(payload)
