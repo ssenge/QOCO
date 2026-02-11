@@ -7,6 +7,7 @@ import numpy as np
 from planqk.service.client import PlanqkServiceClient
 
 from qoco.core.converter import Converter
+from qoco.core.decoder import IdentityDecoder, IndexToVarNameDecoder, ResultDecoder
 from qoco.core.optimizer import Optimizer, P
 from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 
@@ -19,7 +20,7 @@ def _names_by_index(var_map: dict[str, int], n: int) -> list[str]:
 
 
 @dataclass
-class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution, OptimizerRun, ProblemSummary]):
+class KipuBaseOptimizer(Optimizer[P, dict[str, Any], Solution, OptimizerRun, ProblemSummary]):
     """Base optimizer for Kipu Quantum Hub services."""
 
     name: str = "Kipu"
@@ -31,9 +32,27 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution, OptimizerRun, P
     num_greedy_passes: int = 0
     return_circuit: bool = False
     execute_circuit: bool = True
-    converter: Converter[P, dict[str, float]] | None = None
+    # Optional service-specific settings (used by some Kipu optimizers like Miray managed).
+    variant: str | None = None
+    backend_name: str | None = None
+    use_session: bool | None = None
+    num_iterations: int | None = None
+    converter: Converter[P, dict[str, Any]] | None = None
 
-    def _optimize(self, problem_dict: dict[str, float]) -> tuple[Solution, OptimizerRun]:
+    def _extract_problem_payload(self, converted: dict[str, Any]) -> tuple[dict[str, float], dict[str, int]]:
+        if "problem" in converted:
+            return dict(converted["problem"]), dict(converted.get("var_map", {}))
+        return dict(converted), {}
+
+    def build_decoder(self, problem: P, converted: dict[str, Any]) -> ResultDecoder[Solution]:
+        _, var_map = self._extract_problem_payload(converted)
+        if not var_map:
+            return IdentityDecoder()
+        n = max((int(index) for index in var_map.values()), default=-1) + 1
+        return IndexToVarNameDecoder(names_by_index=_names_by_index(var_map, n))
+
+    def _optimize(self, converted: dict[str, Any]) -> tuple[Solution, OptimizerRun]:
+        problem_dict, _ = self._extract_problem_payload(converted)
         client = PlanqkServiceClient(
             str(self.service_endpoint),
             str(self.consumer_key),
@@ -48,6 +67,14 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, float], Solution, OptimizerRun, P
             "return_circuit": bool(self.return_circuit),
             "execute_circuit": bool(self.execute_circuit),
         }
+        if self.variant is not None:
+            request["variant"] = str(self.variant)
+        if self.backend_name is not None:
+            request["backend_name"] = str(self.backend_name)
+        if self.use_session is not None:
+            request["use_session"] = bool(self.use_session)
+        if self.num_iterations is not None:
+            request["num_iterations"] = int(self.num_iterations)
         execution = client.run(request=request)
         result = execution.result()
         if hasattr(result, "dict"):

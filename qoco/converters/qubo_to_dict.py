@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -9,8 +10,8 @@ from qoco.core.qubo import QUBO
 
 
 @dataclass
-class QuboToDictConverter(Converter[QUBO, dict[str, float]]):
-    """Convert QUBO into a tuple-string coefficient dict.
+class QuboToDictConverter(Converter[QUBO, dict[str, Any]]):
+    """Convert QUBO into Kipu payload with sparse tuple-string terms.
 
     Mapping:
     - \"()\" -> offset
@@ -20,7 +21,7 @@ class QuboToDictConverter(Converter[QUBO, dict[str, float]]):
 
     tol: float = 0.0
 
-    def convert(self, problem: QUBO) -> dict[str, float]:
+    def convert(self, problem: QUBO) -> dict[str, Any]:
         Q = np.asarray(problem.Q, dtype=float)
         n = int(Q.shape[0])
         out: dict[str, float] = {}
@@ -35,4 +36,7 @@ class QuboToDictConverter(Converter[QUBO, dict[str, float]]):
                 coef = float(Q[i, j]) + float(Q[j, i])
                 if abs(coef) > float(self.tol):
                     out[f"({i},{j})"] = coef
-        return out
+        return {
+            "problem": out,
+            "var_map": dict(problem.var_map),
+        }

@@ -111,6 +111,7 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         ctx["instance"] = self.init()
 
     def run(self) -> PipelineContext:
+        pipeline_t0 = time.perf_counter()
         ctx = PipelineContext()
         if self.print_steps:
             self._print_step(f"*** Starting pipeline {self.name}...")
@@ -153,7 +154,7 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         t0 = time.perf_counter()
         ctx = self.builder(ctx)
         self._print_stats(time.perf_counter() - t0, self.format_after_builder(ctx))
-        self._print_step(f"*** Starting Optimizer at {self._timestamp()}")
+        self._print_step(f"*** Starting Optimizer '{self.optimizer.name}' at {self._timestamp()}")
         t0 = time.perf_counter()
         ctx["result"] = self.optimizer.optimize(ctx["model"])
         t_opt = time.perf_counter() - t0
@@ -183,4 +184,7 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         self._print_stats(time.perf_counter() - t0, self.format_after_postproc(ctx))
         if self.log_results:
             ctx["result"].write(self._result_log_path())
+        if self.print_steps:
+            total_dt = time.perf_counter() - pipeline_t0
+            self._print_step(f"*** Pipeline finished in {self._format_duration(total_dt)} at {self._timestamp()}")
         return ctx

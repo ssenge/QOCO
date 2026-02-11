@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Generic, TypeVar
 
 from .converter import Converter
+from .decoder import IdentityDecoder, ResultDecoder
 from qoco.converters.identity import IdentityConverter
 from qoco.core.problem import Problem
 from qoco.core.solution import OptimizationResult, OptimizerRun, ProblemSummary, Solution
@@ -43,7 +44,9 @@ class Optimizer(ABC, Generic[P, T, SolutionT, RunT, SummaryT]):
 
         ts_start = datetime.now(timezone.utc)
         converted = self.converter.convert(problem)
+        decoder = self.build_decoder(problem, converted)
         solution, run = self._optimize(converted)
+        solution = self.decode_solution(solution, decoder)
         ts_end = datetime.now(timezone.utc)
 
         summary = problem.summary() if hasattr(problem, "summary") else ProblemSummary()
@@ -57,4 +60,12 @@ class Optimizer(ABC, Generic[P, T, SolutionT, RunT, SummaryT]):
     def _optimize(self, converted: T) -> tuple[SolutionT, RunT]:
         """Optimize the converted problem. Implement in subclass."""
         raise NotImplementedError
+
+    def build_decoder(self, problem: P, converted: T) -> ResultDecoder[SolutionT]:
+        """Build a solution decoder for the converted problem."""
+        return IdentityDecoder()
+
+    def decode_solution(self, solution: SolutionT, decoder: ResultDecoder[SolutionT]) -> SolutionT:
+        """Decode optimizer solution using the decoder built before optimize."""
+        return decoder.decode(solution)
 
