@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Generic, Optional
+from typing import Any, Callable, Generic, Optional
 
 import numpy as np
-from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 from qiskit_aer import AerSimulator
 from qiskit_aer.primitives import SamplerV2
 from qiskit_algorithms.minimum_eigensolvers import QAOA
@@ -74,7 +73,10 @@ def _sample_batch_from_qaoa_result(*, result: Any, n: int) -> SampleBatch:
 
         items = getattr(eigenstate, "items", None)
         if callable(items):
-            samples = [Sample(_to_bitstring_msb(value=int(k), n=int(n)), weight=float(w)) for k, w in eigenstate.items()]
+            samples = [
+                Sample(_to_bitstring_msb(value=int(k), n=int(n)), weight=float(w))
+                for k, w in eigenstate.items()
+            ]
             if samples:
                 return SampleBatch(n=int(n), samples=samples, bit_order="qiskit")
 
@@ -85,24 +87,49 @@ def _sample_batch_from_qaoa_result(*, result: Any, n: int) -> SampleBatch:
     return SampleBatch(n=int(n), samples=[Sample(bitstring, weight=1.0)], bit_order="qiskit")
 
 
-_STANDARD_GATE_NAMES = set(get_standard_gate_name_mapping().keys())
+def _drop_idle_wires(circuit: Any) -> Any:
+    """Drop idle qubits/clbits from a circuit.
+
+    Qiskit 2.0's backend-native compilation can materialize circuits on full device width even
+    if the logical circuit uses only `n` qubits. QAOA requires ansatz width == operator width.
+    """
+
+    from qiskit.converters import circuit_to_dag, dag_to_circuit
+    from qiskit.circuit import Qubit, Clbit
+
+    dag = circuit_to_dag(circuit)
+    idle = list(dag.idle_wires())
+    idle_qubits = [w for w in idle if isinstance(w, Qubit)]
+    idle_clbits = [w for w in idle if isinstance(w, Clbit)]
+    if idle_qubits:
+        dag.remove_qubits(*idle_qubits)
+    if idle_clbits:
+        dag.remove_clbits(*idle_clbits)
+    return dag_to_circuit(dag)
+
+
+@dataclass(frozen=True)
+class _DropIdleWiresTranspiler:
+    base: Any
+
+    def run(self, circuit: Any, **kwargs: Any) -> Any:
+        out = self.base.run(circuit, **kwargs)
+        return _drop_idle_wires(out)
+
+
+def _is_ibm_runtime_primitive(obj: Any) -> bool:
+    # Heuristic: IBM runtime primitives live in `qiskit_ibm_runtime.*`.
+    # We avoid importing qiskit_ibm_runtime here so Aer-only installs still work.
+    return type(obj).__module__.startswith("qiskit_ibm_runtime")
 
 
 @dataclass
 class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
     """Solve QUBOs using Qiskit's QAOA.
 
-    Notes:
-    - By default, uses Aer SamplerV2 if no sampler is provided.
-    - If a backend is provided (e.g. IBM QPU via runtime), the intended workflow is to
-      let the primitive/runtime handle hardware compilation. We therefore do NOT use
-      `generate_preset_pass_manager(backend=...)` by default, because it can inflate
-      circuits to full device width (ancilla allocation), which breaks qiskit-algorithms'
-      circuit/observable consistency checks.
-    - For Aer, we DO use `generate_preset_pass_manager(backend=AerSimulator(), ...)` by
-      default to ensure composite instructions are unrolled into supported gates.
-    - By default, converts QUBO -> Ising directly (SparsePauliOp + offset). If
-      `use_quadratic_program=True`, uses Qiskit's QuadraticProgram.to_ising() path instead.
+    Design constraints (per project convention):
+    - Do not hardcode basis gates or backend-specific gate replacements here.
+    - Backend-specific compilation should be configured outside (by passing `backend` and/or `transpiler`).
     """
 
     name: str = "QiskitQAOA"
@@ -119,16 +146,19 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
     shots: int | None = None
     seed: Optional[int] = 0
 
-    # Hardware-aware transpilation
+    # Hardware / compilation configuration
     backend: Any | None = None
     optimization_level: int = 1
-    transpiler: Any | None = None  # a Qiskit PassManager-like object
+    transpiler: Any | None = None  # PassManager-like; if None we build a sensible default
 
-    # QAOA customization
+    # QAOA customization + post-processing
     initial_point: list[float] | None = None
     qaoa_kwargs: dict[str, Any] = field(default_factory=dict)
     cost_scale: float | None = None
     postproc: PostProcessor = field(default_factory=NoOpPostProcessor)
+    ansatz_hook: Callable[[QUBO, int], tuple[dict[str, Any], list[float] | None]] = field(
+        default_factory=lambda: (lambda _qubo, _n: ({}, None))
+    )
 
     def encode_qubo(self, qubo: QUBO) -> tuple[Any, float]:
         if self.use_quadratic_program:
@@ -146,41 +176,23 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
             kwargs["default_shots"] = int(self.shots)
         return SamplerV2(**kwargs)  # Aer fallback
 
-    def make_transpiler(self) -> Any:
-        if self.transpiler is not None:
-            return self.transpiler
-        backend = self.backend
-
-        # Default: local Aer simulation.
-        if backend is None:
-            if self.sampler is None:
-                return generate_preset_pass_manager(
-                    backend=AerSimulator(),
-                    optimization_level=int(self.optimization_level),
-                )
-            return generate_preset_pass_manager(optimization_level=int(self.optimization_level))
-
-        # Hardware: keep circuit width at n, but decompose composite instructions into
-        # ISA-compatible gates.
-        ops = list(getattr(getattr(backend, "target", None), "operation_names", []))
-        basis_gates = [str(name) for name in ops if str(name) in _STANDARD_GATE_NAMES]
-        if not basis_gates:
-            basis_gates = ["rz", "sx", "x", "cx"]
-        return generate_preset_pass_manager(
-            optimization_level=int(self.optimization_level),
-            basis_gates=basis_gates,
-        )
-
-    def make_qaoa(self) -> QAOA:
+    def make_qaoa(
+        self,
+        *,
+        sampler: Any,
+        transpiler: Any | None,
+        qaoa_kwargs: dict[str, Any],
+        initial_point: list[float] | None,
+    ) -> QAOA:
         qaoa = QAOA(
-            sampler=self.make_sampler(),
+            sampler=sampler,
             optimizer=self.classical_optimizer,
             reps=int(self.reps),
-            transpiler=self.make_transpiler(),
-            **dict(self.qaoa_kwargs),
+            transpiler=transpiler,
+            **dict(qaoa_kwargs),
         )
-        if self.initial_point is not None:
-            qaoa.initial_point = list(self.initial_point)
+        if initial_point is not None:
+            qaoa.initial_point = list(initial_point)
         return qaoa
 
     def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
@@ -189,12 +201,44 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
             op = op * float(self.cost_scale)
             offset = float(offset) * float(self.cost_scale)
 
-        qaoa = self.make_qaoa()
+        n = int(qubo.n_vars)
+        sampler = self.make_sampler()
+
+        transpiler: Any | None
+        if self.transpiler is not None:
+            transpiler = self.transpiler
+        elif self.backend is None:
+            transpiler = generate_preset_pass_manager(
+                backend=AerSimulator(),
+                optimization_level=int(self.optimization_level),
+            )
+        else:
+            pm = generate_preset_pass_manager(
+                backend=self.backend,
+                optimization_level=int(self.optimization_level),
+                initial_layout=list(range(n)) if n > 0 else None,
+            )
+            transpiler = _DropIdleWiresTranspiler(pm)
+
+        hook_kwargs, hook_initial_point = self.ansatz_hook(qubo, n)
+        qaoa_kwargs = dict(self.qaoa_kwargs)
+        qaoa_kwargs.update(dict(hook_kwargs))
+        initial_point = hook_initial_point if hook_initial_point is not None else self.initial_point
+
+        qaoa = self.make_qaoa(
+            sampler=sampler,
+            transpiler=transpiler,
+            qaoa_kwargs=qaoa_kwargs,
+            initial_point=initial_point,
+        )
+        if self.seed is not None:
+            # Qiskit algorithms use numpy global RNG internally; seed is best-effort.
+            np.random.seed(int(self.seed))
 
         optimizer_timestamp_start = datetime.now(timezone.utc)
         res = qaoa.compute_minimum_eigenvalue(op)
         optimizer_timestamp_end = datetime.now(timezone.utc)
-        n = int(qubo.n_vars)
+
         batch = _sample_batch_from_qaoa_result(result=res, n=n)
         post = self.postproc.run(qubo=qubo, batch=batch)
         x = np.asarray(post.x, dtype=int).reshape(-1)
@@ -204,7 +248,7 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
         var_values = {names[i]: int(x[i]) for i in range(n)}
 
         solution = Solution(
-            status=Status.FEASIBLE,  # let's cross fingers ;-)
+            status=Status.FEASIBLE,
             objective=float(obj),
             var_values=var_values,
             var_arrays={"x": x},
