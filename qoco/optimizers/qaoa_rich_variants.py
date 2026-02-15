@@ -25,10 +25,20 @@ def cvar_aggregation(*, alpha: float) -> Callable[[list[float]], float]:
         raise ValueError("alpha must be in (0, 1]")
 
     def agg(values: list[float]) -> float:
-        if not values:
+        vals = list(values)
+        if vals and not isinstance(vals[0], (int, float, np.floating)):
+            flat: list[float] = []
+            for v in vals:
+                if isinstance(v, (int, float, np.floating)):
+                    flat.append(float(v))
+                else:
+                    flat.extend([float(np.real_if_close(x)) for x in list(v)])
+            vals = flat
+
+        if not vals:
             raise ValueError("no values")
-        k = max(1, int(np.ceil(a * len(values))))
-        best = np.sort(np.asarray(values, dtype=float))[:k]
+        k = max(1, int(np.ceil(a * len(vals))))
+        best = np.sort(np.asarray(vals, dtype=float))[:k]
         return float(np.mean(best))
 
     return agg
@@ -94,7 +104,41 @@ def x_mixer_operator(*, n: int) -> SparsePauliOp:
     return SparsePauliOp.from_list(terms)
 
 
-def xy_group_mixer_operator(*, n: int, groups: list[list[int]]) -> SparsePauliOp:
+def y_mixer_operator(*, n: int) -> SparsePauliOp:
+    terms = []
+    for i in range(int(n)):
+        p = ["I"] * int(n)
+        p[i] = "Y"
+        terms.append(("".join(p), 1.0))
+    return SparsePauliOp.from_list(terms)
+
+
+def rotated_xy_mixer_operator(*, n: int, phi: float) -> SparsePauliOp:
+    """Single-qubit rotated mixer: sum_i (cos(phi) X_i + sin(phi) Y_i)."""
+    c = float(np.cos(float(phi)))
+    s = float(np.sin(float(phi)))
+    terms: list[tuple[str, float]] = []
+    for i in range(int(n)):
+        px = ["I"] * int(n)
+        py = ["I"] * int(n)
+        px[i] = "X"
+        py[i] = "Y"
+        if c != 0.0:
+            terms.append(("".join(px), c))
+        if s != 0.0:
+            terms.append(("".join(py), s))
+    if not terms:
+        return SparsePauliOp.from_list([("I" * int(n), 0.0)])
+    return SparsePauliOp.from_list(terms)
+
+
+def xy_group_mixer_operator(
+    *,
+    n: int,
+    groups: list[list[int]],
+    topology: str = "complete",  # "complete" | "ring"
+    weight: float = 1.0,
+) -> SparsePauliOp:
     """Hamming-weight preserving XY mixer on groups.
 
     For each group g, adds pairwise terms (X_i X_j + Y_i Y_j).
@@ -109,14 +153,21 @@ def xy_group_mixer_operator(*, n: int, groups: list[list[int]]) -> SparsePauliOp
         p[j] = pauli_j
         terms.append(("".join(p), float(w)))
 
+    w = float(weight)
     for g in groups:
         idx = [int(i) for i in g]
-        for a in range(len(idx)):
-            for b in range(a + 1, len(idx)):
-                i = idx[a]
-                j = idx[b]
-                add("X", "X", i, j, 1.0)
-                add("Y", "Y", i, j, 1.0)
+        if len(idx) < 2:
+            continue
+        if topology == "ring":
+            pairs = [(idx[i], idx[(i + 1) % len(idx)]) for i in range(len(idx))]
+        elif topology == "complete":
+            pairs = [(idx[a], idx[b]) for a in range(len(idx)) for b in range(a + 1, len(idx))]
+        else:
+            raise ValueError(f"unknown topology: {topology}")
+
+        for i, j in pairs:
+            add("X", "X", int(i), int(j), w)
+            add("Y", "Y", int(i), int(j), w)
 
     if not terms:
         return SparsePauliOp.from_list([("I" * n, 0.0)])
