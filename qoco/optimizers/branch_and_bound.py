@@ -6,7 +6,7 @@ Guarantees optimal solution (within node limit).
 """
 
 from dataclasses import dataclass, field
-from typing import Generic, Optional, List
+from typing import Dict, Generic, List, Optional
 from itertools import product
 import heapq
 import numpy as np

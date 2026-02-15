@@ -36,6 +36,7 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
     log_file: Optional[str] = None
     verbose: bool = False
     capture_duals: bool = False
+    options: dict[str, object] = field(default_factory=dict)
 
     def _optimize(self, model: pyo.ConcreteModel) -> tuple[Solution, OptimizerRun]:
         if self.capture_duals and not hasattr(model, "dual"):
@@ -49,6 +50,8 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
             solver.options["MIPGap"] = self.mip_gap
         if self.log_file is not None:
             solver.options["LogFile"] = self.log_file
+        for key, value in self.options.items():
+            solver.options[str(key)] = value
 
         optimizer_timestamp_start = datetime.now(timezone.utc)
         result = solver.solve(model, tee=self.verbose)
@@ -72,11 +75,10 @@ class GurobiOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Opti
                     if value is not None:
                         var_values[var[idx].name] = value
 
-        try:
-            obj_val = pyo.value(model.obj) if status in (Status.OPTIMAL, Status.FEASIBLE) else float("inf")
-        except Exception:
-            obj_val = float("inf")
-            status = Status.UNKNOWN
+        obj_val = float("inf")
+        if status in (Status.OPTIMAL, Status.FEASIBLE):
+            objectives = list(model.component_data_objects(pyo.Objective, active=True, descend_into=True))
+            obj_val = pyo.value(objectives[0]) if objectives else float("inf")
 
         solution = Solution(
             status=status,
