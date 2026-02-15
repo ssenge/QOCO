@@ -32,6 +32,7 @@ qiskit = [
   "qiskit-algorithms>=0.3",
   "qiskit-optimization>=0.6",
   "qiskit-machine-learning>=0.7",
+  "optuna",
 ]
 dwave = [
   "dimod>=0.12",
