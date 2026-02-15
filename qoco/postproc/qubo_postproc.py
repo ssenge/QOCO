@@ -111,13 +111,19 @@ class MostFrequentPostProcessor(PostProcessor):
 
 
 def _delta_single_flip(*, Q: np.ndarray, x: np.ndarray, i: int) -> float:
-    # Objective is x^T Q x + offset. For bit flip at i, using dense formula:
-    # Δ = (1 - 2 x_i) * (Q_ii + 2 * sum_{j!=i} Q_ij x_j)
-    # Works for general (not-necessarily symmetric) Q.
-    xi = float(x[int(i)])
-    s = float(Q[int(i), int(i)])
-    s += 2.0 * float(np.dot(Q[int(i), :], x) - Q[int(i), int(i)] * xi)
-    return float((1.0 - 2.0 * xi) * s)
+    # Objective is x^T Q x + offset where Q stores pair terms at Q[min(i,j), max(i,j)]
+    # (i.e. upper-triangular storage for i!=j).
+    #
+    # For a flip at i, only terms containing x_i change:
+    #   Δ = (1 - 2 x_i) * (Q_ii + sum_{j<i} Q_{j,i} x_j + sum_{j>i} Q_{i,j} x_j)
+    i = int(i)
+    xi = x[i]
+    s = Q[i, i]
+    if i > 0:
+        s += np.dot(Q[:i, i], x[:i])
+    if i + 1 < Q.shape[0]:
+        s += np.dot(Q[i, i + 1 :], x[i + 1 :])
+    return (1.0 - 2.0 * xi) * float(s)
 
 
 def greedy_1flip_local_search(

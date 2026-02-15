@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+import multiprocessing as mp
 
 from qoco.core.qubo import QUBO
 from qoco.postproc.qubo_postproc import (
@@ -294,4 +295,58 @@ class PCEPostProcessor(PostProcessor):
                 "refine_iters": int(it_ref),
             },
         )
+
+
+def _safe_pce_worker(inner: PCEPostProcessor, qubo: QUBO, batch: SampleBatch, conn) -> None:
+    try:
+        res = inner.run(qubo=qubo, batch=batch)
+        conn.send(res)
+    except BaseException as exc:
+        conn.send(exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@dataclass
+class SafePCEPostProcessor(PostProcessor):
+    """Run PCE in a separate process and fall back on failure.
+
+    Reason: on some environments, importing torch can terminate the process (OpenMP runtime conflicts).
+    Spawning isolates this failure mode so the caller can still make progress.
+    """
+
+    inner: PCEPostProcessor = field(default_factory=PCEPostProcessor)
+    fallback: PostProcessor = field(default_factory=TakeBestPostProcessor)
+    timeout_s: float = 60.0
+
+    def run(self, *, qubo: QUBO, batch: SampleBatch) -> PostProcResult:
+        ctx = mp.get_context("spawn")
+        parent, child = ctx.Pipe(duplex=False)
+        proc = ctx.Process(target=_safe_pce_worker, args=(self.inner, qubo, batch, child))
+        proc.start()
+        try:
+            if parent.poll(timeout=float(self.timeout_s)):
+                msg = parent.recv()
+                if isinstance(msg, PostProcResult):
+                    return msg
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.join(timeout=0.1)
+            except Exception:
+                pass
+            if proc.is_alive():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.join(timeout=0.5)
+                except Exception:
+                    pass
+        return self.fallback.run(qubo=qubo, batch=batch)
 
