@@ -38,6 +38,8 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
     print_stats: bool = False
     log_results: bool = False
     log_dir: str | Path = "logs/optimizer_results"
+    # If False, strip variable assignments from the logged result to keep logs small.
+    log_var_assignments: bool = False
 
     # ---------------------------------------------------------------------
     # Stats formatting hooks (NoOp defaults; always called; never None)
@@ -183,7 +185,13 @@ class OptimizerPipeline(Generic[P, M, R, Map]):
         ctx = self.postproc(ctx)
         self._print_stats(time.perf_counter() - t0, self.format_after_postproc(ctx))
         if self.log_results:
-            ctx["result"].write(self._result_log_path())
+            res = ctx["result"]
+            if not bool(self.log_var_assignments):
+                sol = getattr(res, "solution", None)
+                if sol is not None:
+                    sol_slim = replace(sol, var_values={}, var_arrays={}, var_array_index={})
+                    res = replace(res, solution=sol_slim)
+            res.write(self._result_log_path())
         if self.print_steps:
             total_dt = time.perf_counter() - pipeline_t0
             self._print_step(f"*** Pipeline finished in {self._format_duration(total_dt)} at {self._timestamp()}")
