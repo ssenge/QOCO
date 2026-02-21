@@ -84,9 +84,25 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, Any], Solution, OptimizerRun, Pro
         else:
             payload = {}
 
-        status = payload.get("_embedded", {}).get("status", {}).get("status")
+        status_obj = payload.get("_embedded", {}).get("status", {})
+        status = status_obj.get("status") if isinstance(status_obj, dict) else None
+        exec_id = status_obj.get("id") if isinstance(status_obj, dict) else None
         if status == "FAILED":
-            raise ValueError("Kipu execution failed; check service logs")
+            log_url = None
+            if exec_id is not None:
+                base = str(self.service_endpoint).rstrip("/")
+                log_url = f"{base}/{exec_id}/log"
+            debug = {
+                "id": exec_id,
+                "endpoint": str(self.service_endpoint),
+                "log_url": log_url,
+                "backend_name": request.get("backend_name"),
+                "variant": request.get("variant"),
+                "shots": request.get("shots"),
+                "num_iterations": request.get("num_iterations"),
+                "num_greedy_passes": request.get("num_greedy_passes"),
+            }
+            raise ValueError(f"Kipu execution failed; details={debug}")
 
         inner = payload.get("processed_result")
         if not isinstance(inner, dict):
