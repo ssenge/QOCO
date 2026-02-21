@@ -95,3 +95,23 @@ class ProblemAdapter(ABC):
     def clone_step_features(self, batch: Any):
         """Return per-step features tensor of shape (B, step_feat_dim)."""
         raise NotImplementedError
+
+    @property
+    def static_node_features(self) -> bool:
+        """Whether node features are constant across decoding steps.
+
+        When ``True`` (default), the encoder output can be cached once per
+        episode and reused for every step.  Set to ``False`` for MDPs where
+        nodes carry dynamic state (e.g. driver workload) that changes after
+        each action.
+        """
+        return True
+
+    def checkpoint_problem_cfg(self) -> dict[str, object] | None:
+        """Optional: persist problem/distribution config into policy checkpoints.
+
+        This is useful for evaluation scripts to automatically recreate the same
+        instance distribution (e.g., synthetic generators) without requiring the
+        user to manually pass matching CLI parameters.
+        """
+        return None

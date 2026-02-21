@@ -8,12 +8,44 @@ import torch
 
 from qoco.optimizers.rl.training.problem_adapter import ProblemAdapter
 from qoco.optimizers.rl.training.methods.relex.baselines import Baseline, RolloutBaseline, WarmupBaseline
+from qoco.optimizers.rl.training.methods.relex.model_standard import DualPathCache
 
 
 class Algo(ABC):
     @abstractmethod
     def loss(self, model, adapter: ProblemAdapter, td) -> torch.Tensor:
         raise NotImplementedError
+
+
+def _precompute_model_cache(model, node_features: torch.Tensor):
+    """If the model exposes encoder/decoder with precompute_cache, encode once and reuse.
+
+    For dual-path encoders, returns a ``DualPathCache`` containing the static
+    embedding (GAN + PQC applied once).  The dynamic part is computed per step
+    inside ``_logits_with_cache``.
+    """
+    enc = getattr(model, "encoder", None)
+    dec = getattr(model, "decoder", None)
+    pre = getattr(dec, "precompute_cache", None) if dec is not None else None
+    if enc is None or dec is None or pre is None:
+        return None, None
+    if getattr(enc, "_dual_path", False):
+        static_h = enc.encode_static(node_features.shape[0], node_features.device)
+        return dec, DualPathCache(static_h=static_h, encoder=enc)
+    h = enc(node_features)
+    cache = pre(h)
+    return dec, cache
+
+
+def _logits_with_cache(model, node_features: torch.Tensor, step_features: torch.Tensor, mask: torch.Tensor, dec, cache):
+    if dec is None or cache is None:
+        return model(node_features, step_features, mask)
+    if isinstance(cache, DualPathCache):
+        h_dynamic = cache.encoder.encode_dynamic(node_features)
+        h = cache.static_h + h_dynamic
+        full_cache = dec.precompute_cache(h)
+        return dec(step_features, mask, full_cache)
+    return dec(step_features, mask, cache)
 
 
 @dataclass
@@ -41,12 +73,22 @@ class ReinforceAlgo(Algo):
         if self.baseline.requires_init_td:
             init_td = td.clone()
 
+        dec = None
+        cache = None
+        can_cache = getattr(adapter, "static_node_features", True) or getattr(model, "dual_path", False)
+        if can_cache:
+            try:
+                node_features0 = adapter.clone_node_features(td)
+                dec, cache = _precompute_model_cache(model, node_features0)
+            except Exception:
+                dec, cache = None, None
+
         while not adapter.is_done(td).all():
             mask = adapter.action_mask(td)
             node_features = adapter.clone_node_features(td)
             step_features = adapter.clone_step_features(td)
 
-            logits = model(node_features, step_features, mask)
+            logits = _logits_with_cache(model, node_features, step_features, mask, dec, cache)
             logits = logits.masked_fill(~mask, float("-inf"))
 
             probs = torch.softmax(logits, dim=-1)
@@ -140,13 +182,26 @@ class PPO(Algo):
             init_td = td.clone()
 
         saved = []
+        dec_new = None
+        cache_new = None
+        dec_old = None
+        cache_old = None
+        can_cache = getattr(adapter, "static_node_features", True) or getattr(model, "dual_path", False)
+        if can_cache:
+            try:
+                node_features0 = adapter.clone_node_features(td)
+                dec_new, cache_new = _precompute_model_cache(model, node_features0)
+                dec_old, cache_old = _precompute_model_cache(self._old_model, node_features0)  # type: ignore[arg-type]
+            except Exception:
+                dec_new = cache_new = dec_old = cache_old = None
+
         while not adapter.is_done(td).all():
             mask = adapter.action_mask(td)
             node_features = adapter.clone_node_features(td)
             step_features = adapter.clone_step_features(td)
             alive = (~adapter.is_done(td)).float()
 
-            logits = model(node_features, step_features, mask)
+            logits = _logits_with_cache(model, node_features, step_features, mask, dec_new, cache_new)
             logits = logits.masked_fill(~mask, float("-inf"))
 
             probs = torch.softmax(logits, dim=-1)
@@ -171,11 +226,15 @@ class PPO(Algo):
         adv = advantage.detach()
 
         for node_features, step_features, mask, action, alive in saved:
-            logits_new = model(node_features, step_features, mask).masked_fill(~mask, float("-inf"))
+            logits_new = _logits_with_cache(model, node_features, step_features, mask, dec_new, cache_new).masked_fill(
+                ~mask, float("-inf")
+            )
             probs_new = torch.softmax(logits_new, dim=-1)
             probs_new = self._normalize_probs(probs_new, mask)
 
-            logits_old = self._old_model(node_features, step_features, mask).masked_fill(~mask, float("-inf"))
+            logits_old = _logits_with_cache(
+                self._old_model, node_features, step_features, mask, dec_old, cache_old  # type: ignore[arg-type]
+            ).masked_fill(~mask, float("-inf"))
             probs_old = torch.softmax(logits_old, dim=-1)
             probs_old = self._normalize_probs(probs_old, mask)
 

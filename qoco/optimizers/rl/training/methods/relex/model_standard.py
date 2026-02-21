@@ -181,6 +181,15 @@ class AMConfig:
     lr: float = 1e-4
     use_pqc: bool = False
     pqc: PQCConfig = PQCConfig()
+    dual_path: bool = False
+
+
+@dataclass
+class DualPathCache:
+    """Cached static encoder output for dual-path models."""
+
+    static_h: torch.Tensor
+    encoder: nn.Module
 
 
 @dataclass
@@ -207,12 +216,33 @@ class AttentionModelEncoder(nn.Module):
         )
         self.net = GraphAttentionNetwork(int(cfg.embed_dim), int(cfg.num_heads), int(cfg.num_layers), int(cfg.ff_hidden))
         self._pqc = pqc_block
+        self._dual_path = bool(cfg.dual_path)
+        if self._dual_path:
+            self.identity_embedding = nn.Embedding(int(cfg.n_nodes), int(cfg.embed_dim))
+            self.dynamic_embed_net = nn.Sequential(
+                nn.Linear(int(cfg.node_feat_dim), int(cfg.embed_dim)),
+                nn.ReLU(),
+                nn.Linear(int(cfg.embed_dim), int(cfg.embed_dim)),
+            )
 
     def forward(self, node_features: torch.Tensor) -> torch.Tensor:
         init_h = self.init_embedding(node_features)
         h = self.net(init_h)
         h = self._pqc(h)
         return h
+
+    def encode_static(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """Encode learned identity embeddings through GAN + PQC (cached once per episode)."""
+        n = int(self.cfg.n_nodes)
+        ids = torch.arange(n, device=device).unsqueeze(0).expand(batch_size, n)
+        h = self.identity_embedding(ids)
+        h = self.net(h)
+        h = self._pqc(h)
+        return h
+
+    def encode_dynamic(self, node_features: torch.Tensor) -> torch.Tensor:
+        """Encode dynamic node features via lightweight MLP (called every step)."""
+        return self.dynamic_embed_net(node_features)
 
 
 @dataclass(eq=False)
@@ -277,7 +307,16 @@ class AttentionModel(nn.Module):
     def device_t(self) -> torch.device:
         return next(self.parameters()).device
 
+    @property
+    def dual_path(self) -> bool:
+        return getattr(self.encoder, "_dual_path", False)
+
     def forward(self, node_features: torch.Tensor, step_features: torch.Tensor, action_mask: torch.Tensor) -> torch.Tensor:
-        h = self.encoder(node_features)
+        if self.encoder._dual_path:
+            h_static = self.encoder.encode_static(node_features.shape[0], node_features.device)
+            h_dynamic = self.encoder.encode_dynamic(node_features)
+            h = h_static + h_dynamic
+        else:
+            h = self.encoder(node_features)
         cache = self.decoder.precompute_cache(h)
         return self.decoder(step_features, action_mask, cache)

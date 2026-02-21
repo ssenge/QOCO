@@ -53,3 +53,8 @@ class PostProcChoice(Enum):
     LOCAL_SEARCH = auto()
     PCE = auto()
 
+
+class MitigationProfile(Enum):
+    NONE = auto()
+    BASIC_DD_XY4_TWIRLING_AUTO = auto()
+

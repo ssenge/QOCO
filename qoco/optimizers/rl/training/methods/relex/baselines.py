@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import torch
 
+from qoco.optimizers.rl.training.methods.relex.model_standard import DualPathCache
+
 
 class Baseline(ABC):
     @property
@@ -66,11 +68,37 @@ def _greedy_rollout_reward(model, adapter, init_td: object) -> torch.Tensor:
     model.eval()
     try:
         with torch.no_grad():
+            dec = cache = None
+            can_cache = getattr(adapter, "static_node_features", True) or getattr(model, "dual_path", False)
+            if can_cache:
+                enc = getattr(model, "encoder", None)
+                dec_mod = getattr(model, "decoder", None)
+                pre = getattr(dec_mod, "precompute_cache", None) if dec_mod is not None else None
+                if enc is not None and dec_mod is not None and pre is not None:
+                    node_features0 = adapter.clone_node_features(td)
+                    if getattr(enc, "_dual_path", False):
+                        static_h = enc.encode_static(node_features0.shape[0], node_features0.device)
+                        cache = DualPathCache(static_h=static_h, encoder=enc)
+                    else:
+                        h = enc(node_features0)
+                        cache = pre(h)
+                    dec = dec_mod
+
             while not adapter.is_done(td).all():
                 mask = adapter.action_mask(td)
-                node_features = adapter.clone_node_features(td)
                 step_features = adapter.clone_step_features(td)
-                logits = model(node_features, step_features, mask)
+                if dec is not None and cache is not None:
+                    if isinstance(cache, DualPathCache):
+                        node_features = adapter.clone_node_features(td)
+                        h_dynamic = cache.encoder.encode_dynamic(node_features)
+                        h = cache.static_h + h_dynamic
+                        full_cache = dec.precompute_cache(h)
+                        logits = dec(step_features, mask, full_cache)
+                    else:
+                        logits = dec(step_features, mask, cache)
+                else:
+                    node_features = adapter.clone_node_features(td)
+                    logits = model(node_features, step_features, mask)
                 logits = logits.masked_fill(~mask, float("-inf"))
                 action = logits.argmax(dim=-1)
                 td = adapter.step(td, action)

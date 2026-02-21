@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import lightning.pytorch as pl
 import torch
@@ -41,6 +42,10 @@ class CloneModule(pl.LightningModule):
         self._t_first_opt_step_end: float | None = None
         self._t_warmup_step_end: float | None = None
         self._t_last_progress_log: float | None = None
+        self._t_trainstep_end: float | None = None
+        self._t_before_opt_step: float | None = None
+        self._last_backward_s: float | None = None
+        self._last_opt_step_s: float | None = None
 
     def training_step(self, batch, batch_idx):
         if self._t_first_batch_start is None:
@@ -50,23 +55,35 @@ class CloneModule(pl.LightningModule):
         t_batch_end = time.time()
         loss = self.algo.loss(model=self.model, adapter=self.adapter, td=td)
         t_loss_end = time.time()
+        t_bl_start = time.time()
         self.algo.baseline.maybe_update(step=self.global_step, model=self.model, adapter=self.adapter)
+        t_bl_end = time.time()
         self.log("train/loss", loss, prog_bar=False)
+        self._t_trainstep_end = time.time()
 
         now = time.time()
-        if self._t_last_progress_log is None or (now - self._t_last_progress_log) >= 60.0:
+        progress_every_s = float(os.environ.get("QOCO_RELEX_PROGRESS_EVERY_S", "60.0"))
+        if self._t_last_progress_log is None or (now - self._t_last_progress_log) >= progress_every_s:
             self._t_last_progress_log = now
             step = int(getattr(self.trainer, "global_step", 0) or 0)
             t0 = self._t_fit_start if self._t_fit_start is not None else now
             elapsed = float(now - t0)
             batch_s = float(t_batch_end - t_batch_start)
             loss_s = float(t_loss_end - t_batch_end)
+            baseline_s = float(t_bl_end - t_bl_start)
+            step_s = float(now - t_batch_start)
+            bwd_s = -1.0 if self._last_backward_s is None else float(self._last_backward_s)
+            opt_s = -1.0 if self._last_opt_step_s is None else float(self._last_opt_step_s)
             logger.info(
-                "[progress] step=%s elapsed_s=%.1f batch_s=%.2f loss_s=%.2f",
+                "[progress] step=%s elapsed_s=%.1f step_s=%.2f batch_s=%.2f loss_s=%.2f baseline_s=%.2f bwd_s=%.2f opt_s=%.2f",
                 step,
                 elapsed,
+                step_s,
                 batch_s,
                 loss_s,
+                baseline_s,
+                bwd_s,
+                opt_s,
             )
         return loss
 
@@ -91,12 +108,27 @@ class CloneModule(pl.LightningModule):
         self._t_baseline_setup_end = time.time()
 
     def on_train_batch_end(self, outputs, batch, batch_idx) -> None:
+        # Optimizer step timing (end is this hook).
+        if self._t_before_opt_step is not None:
+            self._last_opt_step_s = float(time.time() - self._t_before_opt_step)
+            self._t_before_opt_step = None
+
         # `trainer.global_step` is incremented after optimizer step.
         if self._t_first_opt_step_end is None and int(self.trainer.global_step) >= 1:
             self._t_first_opt_step_end = time.time()
         ws = int(self.profile_warmup_steps)
         if ws > 0 and self._t_warmup_step_end is None and int(self.trainer.global_step) >= ws:
             self._t_warmup_step_end = time.time()
+
+    def on_after_backward(self) -> None:
+        # Backward timing: time from end of training_step() to end of backward().
+        if self._t_trainstep_end is None:
+            return
+        self._last_backward_s = float(time.time() - self._t_trainstep_end)
+
+    def on_before_optimizer_step(self, optimizer) -> None:
+        # Called after backward, before optimizer.step()
+        self._t_before_opt_step = time.time()
 
     def on_fit_end(self) -> None:
         self._t_fit_end = time.time()

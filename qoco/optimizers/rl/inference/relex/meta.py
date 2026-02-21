@@ -17,9 +17,11 @@ class RelexAMConfig:
     use_pqc: bool = False
     pqc: PQCConfig = PQCConfig()
     model_name: str = "standard"
+    dual_path: bool = False
 
 
 @dataclass(frozen=True)
 class RelexPolicyMeta(PolicyMeta):
     cfg: RelexAMConfig
+    problem_cfg: dict[str, object] | None = None
 

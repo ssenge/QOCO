@@ -9,6 +9,8 @@ than per node/per decoding step.
 """
 
 from dataclasses import dataclass
+import time
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -21,6 +23,7 @@ class PQCConfig:
     mode: str = "variational"
     # We use 2 features per qubit (ry + rz) for embedding.
     features_per_qubit: int = 2
+    grad_method: str = "param_shift"  # "param_shift" | "spsa"
 
 
 def _build_estimator():
@@ -103,7 +106,14 @@ class NoOpPQCBlock(nn.Module):
 
 
 class PooledPQCBase(nn.Module):
-    """Apply a PQC to pooled embeddings and broadcast to nodes."""
+    """Apply a PQC to pooled embeddings with per-node gating.
+
+    The PQC processes a pooled (mean) embedding to produce a global context
+    vector.  Each node's embedding is then scored against that context via
+    dot-product, yielding a *per-node* scalar gate.  This breaks the old
+    "same gate for all nodes" pattern that made the block invisible to the
+    greedy argmax in pointer attention.
+    """
 
     def __init__(
         self,
@@ -124,6 +134,9 @@ class PooledPQCBase(nn.Module):
         self.down = None
         self.up = nn.Linear(n_qubits, self.embed_dim)
 
+        # Per-node gate bias – initialised so sigmoid(bias) ≈ 1 (near-identity).
+        self.gate_bias = nn.Parameter(torch.tensor(4.0))
+
         self._hadamard_only = str(cfg.mode).lower() == "hadamard"
         self._pqc_input_dim = 0
         self.q = None
@@ -134,13 +147,23 @@ class PooledPQCBase(nn.Module):
             qc, input_params, weight_params, observables = _build_small_pqc(cfg)
             estimator = _build_estimator()
 
-            qnn = EstimatorQNN(
+            grad_method = str(cfg.grad_method).lower().strip()
+            gradient_obj = None
+            if grad_method == "spsa":
+                from qiskit_algorithms.gradients import SPSAEstimatorGradient  # type: ignore
+                gradient_obj = SPSAEstimatorGradient(estimator=estimator, epsilon=0.01)
+
+            qnn_kwargs: dict = dict(
                 circuit=qc,
                 observables=observables,
                 input_params=input_params,
                 weight_params=weight_params,
                 estimator=estimator,
             )
+            if gradient_obj is not None:
+                qnn_kwargs["gradient"] = gradient_obj
+
+            qnn = EstimatorQNN(**qnn_kwargs)
 
             init_w = init_weight_scale * np.random.randn(len(weight_params)).astype(np.float64)
             self.q = TorchConnector(qnn, initial_weights=init_w)
@@ -152,10 +175,17 @@ class PooledPQCBase(nn.Module):
         # Counters (debug/analysis). Not persisted in checkpoints.
         self.register_buffer("_pqc_forward_calls", torch.zeros((), dtype=torch.long), persistent=False)
         self.register_buffer("_pqc_backward_calls", torch.zeros((), dtype=torch.long), persistent=False)
+        self.register_buffer("_pqc_forward_time_s", torch.zeros((), dtype=torch.float64), persistent=False)
+        self.register_buffer("_pqc_backward_time_s", torch.zeros((), dtype=torch.float64), persistent=False)
+
+        # Backward timing state (python-side, not persisted)
+        self._bwd_t0: float | None = None
 
     def reset_counters(self) -> None:
         self._pqc_forward_calls.zero_()
         self._pqc_backward_calls.zero_()
+        self._pqc_forward_time_s.zero_()
+        self._pqc_backward_time_s.zero_()
 
     @property
     def pqc_forward_calls(self) -> int:
@@ -165,15 +195,38 @@ class PooledPQCBase(nn.Module):
     def pqc_backward_calls(self) -> int:
         return int(self._pqc_backward_calls.item())
 
-    def _count_backward(self, grad: torch.Tensor) -> torch.Tensor:
+    @property
+    def pqc_forward_time_s(self) -> float:
+        return float(self._pqc_forward_time_s.item())
+
+    @property
+    def pqc_backward_time_s(self) -> float:
+        return float(self._pqc_backward_time_s.item())
+
+    def _mark_bwd_start(self, grad: torch.Tensor) -> torch.Tensor:
         self._pqc_backward_calls.add_(1)
+        self._bwd_t0 = time.perf_counter()
+        return grad
+
+    def _mark_bwd_end(self, grad: torch.Tensor) -> torch.Tensor:
+        t1 = time.perf_counter()
+        if self._bwd_t0 is not None:
+            self._pqc_backward_time_s.add_(float(t1 - self._bwd_t0))
+        self._bwd_t0 = None
         return grad
 
     def _compute_delta(self, h: torch.Tensor) -> torch.Tensor:
+        """Compute a **per-node** scalar gate from the PQC output.
+
+        Returns a tensor of shape ``(B, N, 1)`` where each node receives
+        a different gate value based on its dot-product similarity with the
+        global PQC context.
+        """
         if h.dim() != 3:
             raise ValueError(f"Expected (B,N,D) tensor, got shape {tuple(h.shape)}")
 
         self._pqc_forward_calls.add_(1)
+        t0 = time.perf_counter()
         g = h.mean(dim=1)  # (B, D)
 
         if self._hadamard_only:
@@ -184,31 +237,56 @@ class PooledPQCBase(nn.Module):
             else:
                 x = torch.empty((g.shape[0], 0), dtype=g.dtype, device=g.device)
 
-            q_dtype = torch.float32 if x.device.type == "mps" else torch.float64
-            z = self.q(x.to(dtype=q_dtype))  # type: ignore[operator]
-        if z.requires_grad:
-            z.register_hook(self._count_backward)
+            # Force float32 even on CPU: QNN backward can be extremely slow in float64.
+            q_dtype = torch.float32
+            xq = x.to(dtype=q_dtype)
+            if xq.requires_grad:
+                xq.register_hook(self._mark_bwd_end)
+            z = self.q(xq)  # type: ignore[operator]
         z = z.to(dtype=h.dtype)
 
-        delta = self.up(z)  # (B, D)
-        return delta.unsqueeze(1)
+        delta_global = self.up(z)  # (B, D)
+
+        # Per-node gate via dot-product: score_i = h_i · delta / √D
+        # Each node gets a DIFFERENT scalar gate because h_i varies per node.
+        score = torch.einsum("bnd,bd->bn", h, delta_global)  # (B, N)
+        score = score / (self.embed_dim ** 0.5)
+        gate = torch.sigmoid(score + self.gate_bias).unsqueeze(-1)  # (B, N, 1)
+
+        if gate.requires_grad:
+            gate.register_hook(self._mark_bwd_start)
+
+        self._pqc_forward_time_s.add_(float(time.perf_counter() - t0))
+        log_every = int(os.environ.get("QOCO_PQC_LOG_EVERY", "0") or "0")
+        if log_every > 0 and (self.pqc_forward_calls % log_every) == 0:
+            avg_fwd = self.pqc_forward_time_s / max(1, self.pqc_forward_calls)
+            avg_bwd = self.pqc_backward_time_s / max(1, self.pqc_backward_calls)
+            print(
+                f"[pqc] calls fwd={self.pqc_forward_calls} bwd={self.pqc_backward_calls} "
+                f"avg_fwd_s={avg_fwd:.3f} avg_bwd_s={avg_bwd:.3f}"
+            )
+        return gate
 
 
 class PooledPQCResidual(PooledPQCBase):
-    """Apply a PQC residual to pooled embeddings.
+    """Apply a PQC-derived per-node scalar gate to embeddings.
 
+    Each node receives a different gate value based on its dot-product
+    similarity with the PQC's global context vector.
     Input/Output: h of shape (B, N, D) -> (B, N, D)
     """
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return h + self._compute_delta(h)
+        gate = self._compute_delta(h)  # (B, N, 1) per-node scalar gate
+        return h * gate
 
 
 class PooledPQCReplace(PooledPQCBase):
-    """Replace embeddings with PQC output (non-residual)."""
+    """Replace embeddings with PQC-gated output (non-residual)."""
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return self._compute_delta(h)
+        gate = self._compute_delta(h)  # (B, N, 1) per-node scalar gate
+        return h * gate
 
 
 class PooledPQCSamplerResidual(nn.Module):
@@ -274,7 +352,12 @@ class PooledPQCSamplerResidual(nn.Module):
 
 
 class ClassicalBottleneckResidual(nn.Module):
-    """Classical residual block with a PQC-matched bottleneck."""
+    """Classical per-node gating block with a PQC-matched bottleneck.
+
+    Mirrors the per-node dot-product gating of ``PooledPQCResidual`` so that
+    PQC-vs-classical comparisons are fair: both produce per-node *different*
+    gates that can genuinely change which node the pointer attention selects.
+    """
 
     def __init__(self, *, embed_dim: int, cfg: PQCConfig):
         super().__init__()
@@ -283,18 +366,26 @@ class ClassicalBottleneckResidual(nn.Module):
         bottleneck_dim = int(cfg.n_qubits) * int(cfg.features_per_qubit)
         self.down = nn.Linear(self.embed_dim, bottleneck_dim)
         self.up = nn.Linear(bottleneck_dim, self.embed_dim)
+        self.gate_bias = nn.Parameter(torch.tensor(4.0))
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         if h.dim() != 3:
             raise ValueError(f"Expected (B,N,D) tensor, got shape {tuple(h.shape)}")
-        g = h.mean(dim=1)
+        g = h.mean(dim=1)  # (B, D)
         z = torch.relu(self.down(g))
-        delta = self.up(z)
-        return h + delta.unsqueeze(1)
+        delta_global = self.up(z)  # (B, D)
+        score = torch.einsum("bnd,bd->bn", h, delta_global)  # (B, N)
+        score = score / (self.embed_dim ** 0.5)
+        gate = torch.sigmoid(score + self.gate_bias).unsqueeze(-1)  # (B, N, 1)
+        return h * gate
 
 
 class ClassicalExtraResidual(nn.Module):
-    """Classical residual block with extra capacity vs PQC bottleneck."""
+    """Classical per-node gating block with extra capacity vs PQC bottleneck.
+
+    Same per-node dot-product gating as ``ClassicalBottleneckResidual``
+    but with a wider hidden layer.
+    """
 
     def __init__(self, *, embed_dim: int, cfg: PQCConfig, expansion_factor: int = 4):
         super().__init__()
@@ -305,13 +396,17 @@ class ClassicalExtraResidual(nn.Module):
         self.down = nn.Linear(self.embed_dim, bottleneck_dim)
         self.mid = nn.Linear(bottleneck_dim, hidden_dim)
         self.up = nn.Linear(hidden_dim, self.embed_dim)
+        self.gate_bias = nn.Parameter(torch.tensor(4.0))
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         if h.dim() != 3:
             raise ValueError(f"Expected (B,N,D) tensor, got shape {tuple(h.shape)}")
-        g = h.mean(dim=1)
+        g = h.mean(dim=1)  # (B, D)
         z = torch.relu(self.down(g))
         z = torch.relu(self.mid(z))
-        delta = self.up(z)
-        return h + delta.unsqueeze(1)
+        delta_global = self.up(z)  # (B, D)
+        score = torch.einsum("bnd,bd->bn", h, delta_global)  # (B, N)
+        score = score / (self.embed_dim ** 0.5)
+        gate = torch.sigmoid(score + self.gate_bias).unsqueeze(-1)  # (B, N, 1)
+        return h * gate
 

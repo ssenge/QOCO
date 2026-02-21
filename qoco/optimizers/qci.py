@@ -123,9 +123,17 @@ class QCIQuboOptimizer(Generic[P], _QCIBaseOptimizer[P], Optimizer[P, QUBO, Solu
 
     def __post_init__(self) -> None:
         self._require_token()
+        rs = int(self.relaxation_schedule)
+        if rs < 1 or rs > 4:
+            raise ValueError(f"QCIQuboOptimizer relaxation_schedule must be in [1, 4], got {rs}.")
 
     def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         from qci_client import JobStatus
+        if not isinstance(qubo, QUBO):
+            raise TypeError(
+                f"QCIQuboOptimizer expects a QUBO model, got {type(qubo).__name__}. "
+                "Use a QUBO runner (e.g. SegmentQUBORunnerV2_5) or convert your model to QUBO first."
+            )
 
         n = int(qubo.n_vars)
         file_payload = _qubo_to_qci_polynomial_file(qubo=qubo, zero_tol=float(self.zero_tol))
@@ -240,6 +248,12 @@ class QCIQlcboOptimizer(Generic[P], _QCIBaseOptimizer[P], Optimizer[P, QLCBO, So
 
     def _optimize(self, qlcbo: QLCBO) -> tuple[Solution, OptimizerRun]:
         from qci_client import JobStatus
+        if not isinstance(qlcbo, QLCBO):
+            raise TypeError(
+                f"QCIQlcboOptimizer expects a QLCBO model, got {type(qlcbo).__name__}. "
+                "For Segment v2.5+LC on QCI, use SegmentQLCBORunnerV2_5_LC (Pyomo->QLCBO) "
+                "instead of a QUBO runner."
+            )
 
         client = self._client()
         obj_payload, cons_payload = _qlcbo_to_qci_files(qlcbo=qlcbo)

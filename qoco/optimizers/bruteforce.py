@@ -18,6 +18,13 @@ from qoco.core.solution import OptimizerRun, ProblemSummary, Solution, Status
 from qoco.converters.identity import IdentityConverter
 
 
+def _get_active_objective(model: pyo.ConcreteModel) -> pyo.Objective:
+    objs = list(model.component_data_objects(pyo.Objective, active=True, descend_into=True))
+    if not objs:
+        raise ValueError("Model has no active objective.")
+    return objs[0]
+
+
 @dataclass
 class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, OptimizerRun, ProblemSummary]):
     """
@@ -31,6 +38,8 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, 
     max_vars: int = 20  # Safety limit: 2^20 = ~1M iterations
     
     def _optimize(self, model: pyo.ConcreteModel) -> tuple[Solution, OptimizerRun]:
+        obj = _get_active_objective(model)
+
         # Collect all binary variables, separating fixed and free
         free_vars = []
         fixed_vars = []
@@ -56,7 +65,7 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, 
             var_values = self._extract_all_vars(model, free_vars, fixed_vars)
             solution = Solution(
                 status=Status.OPTIMAL if self._is_feasible(model) else Status.INFEASIBLE,
-                objective=pyo.value(model.obj),
+                objective=float(pyo.value(obj)),
                 var_values=var_values,
             )
             return solution, OptimizerRun(name=self.name)
@@ -76,7 +85,7 @@ class BruteForceOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, 
             
             # Evaluate objective
             try:
-                obj_val = pyo.value(model.obj)
+                obj_val = float(pyo.value(obj))
             except:
                 continue
             

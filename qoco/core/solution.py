@@ -44,6 +44,7 @@ class OptimizerRun:
     timestamp_end: datetime | None = None
     optimizer_timestamp_start: datetime | None = None
     optimizer_timestamp_end: datetime | None = None
+    metadata: dict[str, Any] | None = None
 
     def tts(self) -> float | None:
         if self.timestamp_start is None or self.timestamp_end is None:

@@ -13,7 +13,7 @@ from qoco.core.qubo import QUBO
 from qoco.core.solution import OptimizerRun, ProblemSummary, Solution
 from qoco.converters.identity import IdentityConverter
 from qoco.optimizers.qiskit_min_eigen import _result_to_solution
-from qoco.optimizers.qiskit_qaoa import QiskitQAOAOptimizer
+from qoco.optimizers.qiskit_legacy_qaoa import QiskitLegacyQAOAOptimizer
 
 
 @dataclass
@@ -21,14 +21,14 @@ class QiskitWarmStartQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, Opti
     """Warm-start QAOA wrapper (Qiskit Optimization).
 
     This is QAOA-specific in Qiskit (`WarmStartQAOAOptimizer`).
-    We reuse `QiskitQAOAOptimizer.make_qaoa()` to construct the underlying QAOA instance.
+    We reuse `QiskitLegacyQAOAOptimizer.make_qaoa()` to construct the underlying QAOA instance.
     """
 
     name: str = "QiskitWarmStartQAOA"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
     qubo_to_qp: Converter[QUBO, Any] = field(default_factory=QuboToQuadraticProgramConverter)
 
-    base_qaoa: QiskitQAOAOptimizer[Any] = field(default_factory=QiskitQAOAOptimizer)
+    base_qaoa: QiskitLegacyQAOAOptimizer[Any] = field(default_factory=QiskitLegacyQAOAOptimizer)
     pre_solver: Any = field(default_factory=SlsqpOptimizer)
     relax_for_pre_solver: bool = True
 
@@ -38,7 +38,7 @@ class QiskitWarmStartQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, Opti
 
     def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
         qp = self.qubo_to_qp.convert(qubo)
-        qaoa = self.base_qaoa.make_qaoa()
+        qaoa = self.base_qaoa.make_qaoa(qubo=qubo, n=qubo.n_vars)
 
         opt = WarmStartQAOAOptimizer(
             pre_solver=self.pre_solver,

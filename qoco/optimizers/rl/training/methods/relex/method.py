@@ -90,7 +90,9 @@ class RelexTrain(Method):
                     use_pqc=bool(cfg_model.use_pqc),
                     pqc=cfg_model.pqc,
                     model_name=str(self.model.model_name),
-                )
+                    dual_path=bool(cfg_model.dual_path),
+                ),
+                problem_cfg=problem.checkpoint_problem_cfg(),
             )
             return meta, module.model.state_dict()
 

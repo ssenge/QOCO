@@ -9,6 +9,7 @@ import numpy as np
 from qiskit_aer import AerSimulator
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit_ibm_runtime.fake_provider import FakeKyiv
+from qiskit.circuit.library import QAOAAnsatz
 
 from qoco.core.qubo import QUBO
 from qoco.optimizers.qaoa_rich_variants import (
@@ -19,6 +20,7 @@ from qoco.optimizers.qaoa_rich_variants import (
     y_mixer_operator,
     xy_group_mixer_operator,
 )
+from qoco.optimizers.qiskit_qaoa import CostPrimitive, TranspileStrategy
 from qoco.optimizers.qiskit_rich_qaoa import QiskitRichQAOAOptimizer
 from qoco.postproc.qubo_postproc import (
     LocalSearchPostProcessor,
@@ -34,12 +36,12 @@ from qoco.tuning.enums import (
     CallbackChoice,
     InitialPointChoice,
     InitialStateChoice,
+    MitigationProfile,
     MixerChoice,
     PostProcChoice,
 )
 from qoco.tuning.param_tuner import ParamTuner
-from qoco.optimizers.qiskit_qaoa import _DropIdleWiresTranspiler, _drop_idle_wires
-from qoco.optimizers.qiskit_qaoa import _sample_batch_from_qaoa_result
+from qoco.tuning.mitigation import apply_mitigation_profile
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,11 @@ class RichQAOASearchSpace:
     shots: Sequence[int] = (128, 256, 512)
     optimization_level: Sequence[int] = (0, 1, 2, 3)
     cost_scale: Sequence[float | None] = (None, 0.5, 1.0, 2.0)
+
+    transpile_strategy: Sequence[TranspileStrategy] = (TranspileStrategy.DEFAULT,)
+    cost_primitive: Sequence[CostPrimitive] = (CostPrimitive.SAMPLER,)
+    return_distribution: Sequence[bool | None] = (None,)
+    mitigation_profile: Sequence[MitigationProfile] = (MitigationProfile.NONE,)
 
     # Lean defaults (explicitly set to QAOA's standard choices):
     initial_state: Sequence[InitialStateChoice] = (InitialStateChoice.UNIFORM_H,)
@@ -107,7 +114,6 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
     # Fixed optimizer knobs (still "covered" by being configurable here)
     transpiler: Any | None = None
     sampler: Any | None = None
-    use_quadratic_program: bool = False
 
     # Optional group definitions for XY group mixers.
     # Groups are lists of qubit indices (0..n-1) and are encoding-specific.
@@ -128,48 +134,51 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
             raise ValueError("backend_choice=CUSTOM requires backend to be provided")
         raise ValueError(f"Unknown backend_choice: {self.backend_choice}")
 
-    def _run_once(self, *, opt: QiskitRichQAOAOptimizer, qubo: QUBO) -> tuple[float, int, int, int]:
+    def _run_once(self, *, opt: QiskitRichQAOAOptimizer, qubo: QUBO) -> tuple[Any, int, int, int]:
         op, _offset = opt.encode_qubo(qubo)
         if opt.cost_scale is not None:
-            op = op * float(opt.cost_scale)
+            op = op * opt.cost_scale
 
-        n = int(qubo.n_vars)
-        sampler = opt.make_sampler()
+        n = qubo.n_vars
+        hook_kwargs, _hook_initial_point = opt.ansatz_hook(qubo, n)
+        ansatz = QAOAAnsatz(
+            cost_operator=op,
+            reps=opt.reps,
+            initial_state=hook_kwargs.get("initial_state"),
+            mixer_operator=hook_kwargs.get("mixer"),
+        )
+        ansatz.measure_all()
 
-        transpiler: Any | None
         if opt.transpiler is not None:
-            transpiler = opt.transpiler
-        elif opt.backend is None:
-            transpiler = generate_preset_pass_manager(backend=AerSimulator(), optimization_level=opt.optimization_level)
-        else:
-            pm = generate_preset_pass_manager(
-                backend=opt.backend,
+            compiled = opt.transpiler.run(ansatz)
+        elif opt.backend is not None:
+            layout_method: str | None = None
+            routing_method: str | None = None
+            if opt.transpile_strategy == TranspileStrategy.SABRE:
+                layout_method = "sabre"
+                routing_method = "sabre"
+            elif opt.transpile_strategy == TranspileStrategy.SABRE_LAYOUT:
+                layout_method = "sabre"
+            elif opt.transpile_strategy == TranspileStrategy.SABRE_ROUTING:
+                routing_method = "sabre"
+            compiled = generate_preset_pass_manager(
+                target=opt.backend.target,
                 optimization_level=opt.optimization_level,
-                initial_layout=list(range(n)) if n > 0 else None,
-            )
-            transpiler = _DropIdleWiresTranspiler(pm)
+                layout_method=layout_method,
+                routing_method=routing_method,
+            ).run(ansatz)
+        else:
+            compiled = generate_preset_pass_manager(
+                backend=AerSimulator(),
+                optimization_level=opt.optimization_level,
+            ).run(ansatz)
 
-        hook_kwargs, hook_initial_point = opt.ansatz_hook(qubo, n)
-        qaoa_kwargs = dict(opt.qaoa_kwargs)
-        qaoa_kwargs.update(dict(hook_kwargs))
-        initial_point = hook_initial_point if hook_initial_point is not None else opt.initial_point
-
-        qaoa = opt.make_qaoa(sampler=sampler, transpiler=transpiler, qaoa_kwargs=qaoa_kwargs, initial_point=initial_point)
-        if opt.seed is not None:
-            np.random.seed(int(opt.seed))
-
-        res = qaoa.compute_minimum_eigenvalue(op)
-        batch = _sample_batch_from_qaoa_result(result=res, n=n)
-        post = opt.postproc.run(qubo=qubo, batch=batch)
-        base_obj = float(post.objective)
-
-        compiled = transpiler.run(qaoa.ansatz) if transpiler is not None else qaoa.ansatz
-        compiled = _drop_idle_wires(compiled)
         depth = int(compiled.depth())
         ops = compiled.count_ops()
         swaps = int(ops.get("swap", 0))
-        n_2q = int(sum(1 for inst, qargs, _cargs in compiled.data if len(qargs) == 2))
-        return base_obj, depth, swaps, n_2q
+        n_2q = int(sum(1 for _inst, qargs, _cargs in compiled.data if len(qargs) == 2))
+        res = opt.optimize(qubo)
+        return res, depth, swaps, n_2q
 
     def _evaluate(self, trial: optuna.Trial) -> float:
         if not self.classical_optimizer_tuners:
@@ -180,6 +189,11 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
         optimization_level = _cat(trial, "optimization_level", self.space.optimization_level)
         cost_scale = _cat(trial, "cost_scale", self.space.cost_scale)
         cost_scale_f = cost_scale
+
+        transpile_strategy = _cat(trial, "transpile_strategy", self.space.transpile_strategy)
+        cost_primitive = _cat(trial, "cost_primitive", self.space.cost_primitive)
+        return_distribution = _cat(trial, "return_distribution", self.space.return_distribution)
+        mitigation_profile = _cat(trial, "mitigation_profile", self.space.mitigation_profile)
 
         # Choose a classical optimizer tuner, then let it suggest its own params.
         idx = trial.suggest_int("classical_optimizer_idx", 0, len(self.classical_optimizer_tuners) - 1)
@@ -258,7 +272,9 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
             cost_scale=cost_scale_f,
             transpiler=self.transpiler,
             sampler=self.sampler,
-            use_quadratic_program=self.use_quadratic_program,
+            transpile_strategy=transpile_strategy,
+            cost_primitive=cost_primitive,
+            return_distribution=return_distribution,
             build_initial_state=build_initial_state,
             build_mixer=build_mixer,
             build_callback=build_callback,
@@ -267,17 +283,25 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
             postproc=post_processor,
         )
 
+        if mitigation_profile != MitigationProfile.NONE:
+            if opt.sampler is None:
+                raise ValueError("mitigation_profile requires an explicit sampler to be provided")
+            apply_mitigation_profile(sampler=opt.sampler, profile=mitigation_profile)
+
         trial.set_user_attr("n_qubits", self.qubo.n_vars)
-        base_obj, depth, swaps, n_2q = self._run_once(opt=opt, qubo=self.qubo)
+        res, depth, swaps, n_2q = self._run_once(opt=opt, qubo=self.qubo)
+        base_obj = res.solution.objective
         trial.set_user_attr("base_objective", base_obj)
         trial.set_user_attr("circuit_depth", depth)
         trial.set_user_attr("circuit_swaps", swaps)
         trial.set_user_attr("circuit_2q_ops", n_2q)
+        if res.run.metadata is not None and "qaoa_config" in res.run.metadata:
+            trial.set_user_attr("qaoa_config", res.run.metadata["qaoa_config"])
 
         return (
-            float(self.objective_weight) * float(base_obj)
-            + float(self.depth_weight) * float(depth)
-            + float(self.swap_weight) * float(swaps)
-            + float(self.twoq_weight) * float(n_2q)
+            self.objective_weight * base_obj
+            + self.depth_weight * depth
+            + self.swap_weight * swaps
+            + self.twoq_weight * n_2q
         )
 
