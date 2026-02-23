@@ -27,17 +27,21 @@ class MiraySimOptimizer(KipuBaseOptimizer):
 
     service_endpoint: str = MIRAY_SIM_DEFAULT_ENDPOINT
     converter: Converter[P, dict[str, Any]] = field(default_factory=QuboToDictConverter)
-    return_circuit: bool = False
-    execute_circuit: bool = True
+    return_circuit: bool | None = False
+    execute_circuit: bool | None = True
 
 
 @dataclass
 class MirayOptimizer(KipuBaseOptimizer):
-    """Solve QUBOs using Kipu Quantum Miray managed service (real hardware)."""
+    """Solve QUBOs using Kipu Quantum Miray managed service (real hardware).
+
+    Per the official Marketplace API the only accepted fields are:
+    problem, problem_type, shots, num_greedy_passes, num_iterations,
+    backend_name, use_session.  IBM credentials are managed server-side.
+    """
 
     name: str = "KipuMiray"
 
     service_endpoint: str = MIRAY_DEFAULT_ENDPOINT
     converter: Converter[P, dict[str, Any]] = field(default_factory=QuboToDictConverter)
-    return_circuit: bool = False
-    execute_circuit: bool = True
+    problem_type: str = "binary"

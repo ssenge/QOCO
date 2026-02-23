@@ -30,13 +30,21 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, Any], Solution, OptimizerRun, Pro
     token_endpoint: str = "https://gateway.hub.kipu-quantum.com/token"
     shots: int = 1000
     num_greedy_passes: int = 0
-    return_circuit: bool = False
-    execute_circuit: bool = True
-    # Optional service-specific settings (used by some Kipu optimizers like Miray managed).
+    problem_type: str = "binary"
+    return_circuit: bool | None = None
+    execute_circuit: bool | None = None
+    wrap_data_field: bool = False
     variant: str | None = None
     backend_name: str | None = None
     use_session: bool | None = None
     num_iterations: int | None = None
+    platform: str | None = None
+    transpilation_only: bool | None = None
+    ibm_token: str | None = None
+    ibm_instance: str | None = None
+    timeout: str | None = None
+    gate_threshold: int | None = None
+    approximation_degree: int | None = None
     converter: Converter[P, dict[str, Any]] | None = None
 
     def _extract_problem_payload(self, converted: dict[str, Any]) -> tuple[dict[str, float], dict[str, int]]:
@@ -61,20 +69,31 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, Any], Solution, OptimizerRun, Pro
         )
         request: dict[str, Any] = {
             "problem": dict(problem_dict),
-            "problem_type": "binary",
+            "problem_type": str(self.problem_type),
             "shots": int(self.shots),
             "num_greedy_passes": int(self.num_greedy_passes),
-            "return_circuit": bool(self.return_circuit),
-            "execute_circuit": bool(self.execute_circuit),
         }
-        if self.variant is not None:
-            request["variant"] = str(self.variant)
-        if self.backend_name is not None:
-            request["backend_name"] = str(self.backend_name)
-        if self.use_session is not None:
-            request["use_session"] = bool(self.use_session)
-        if self.num_iterations is not None:
-            request["num_iterations"] = int(self.num_iterations)
+        _optional: dict[str, Any] = {
+            "return_circuit": self.return_circuit,
+            "execute_circuit": self.execute_circuit,
+            "transpilation_only": self.transpilation_only,
+            "platform": self.platform,
+            "ibm_token": self.ibm_token,
+            "ibm_instance": self.ibm_instance,
+            "variant": self.variant,
+            "backend_name": self.backend_name,
+            "use_session": self.use_session,
+            "num_iterations": self.num_iterations,
+            "timeout": self.timeout,
+            "gate_threshold": self.gate_threshold,
+            "approximation_degree": self.approximation_degree,
+        }
+        for k, v in _optional.items():
+            if v is not None:
+                request[k] = v
+        inner_request = dict(request)
+        if self.wrap_data_field:
+            request = {"_data": request}
         execution = client.run(request=request)
         result = execution.result()
         if hasattr(result, "dict"):
@@ -96,11 +115,12 @@ class KipuBaseOptimizer(Optimizer[P, dict[str, Any], Solution, OptimizerRun, Pro
                 "id": exec_id,
                 "endpoint": str(self.service_endpoint),
                 "log_url": log_url,
-                "backend_name": request.get("backend_name"),
-                "variant": request.get("variant"),
-                "shots": request.get("shots"),
-                "num_iterations": request.get("num_iterations"),
-                "num_greedy_passes": request.get("num_greedy_passes"),
+                "backend_name": inner_request.get("backend_name"),
+                "variant": inner_request.get("variant"),
+                "shots": inner_request.get("shots"),
+                "num_iterations": inner_request.get("num_iterations"),
+                "num_greedy_passes": inner_request.get("num_greedy_passes"),
+                "full_response": payload,
             }
             raise ValueError(f"Kipu execution failed; details={debug}")
 
