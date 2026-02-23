@@ -20,7 +20,7 @@ from qoco.optimizers.qaoa_rich_variants import (
     y_mixer_operator,
     xy_group_mixer_operator,
 )
-from qoco.optimizers.qiskit_qaoa import CostPrimitive, TranspileStrategy
+from qoco.optimizers.qiskit_qaoa import AnsatzChoice, CostPrimitive, TranspileStrategy
 from qoco.optimizers.qiskit_rich_qaoa import QiskitRichQAOAOptimizer
 from qoco.postproc.qubo_postproc import (
     LocalSearchPostProcessor,
@@ -55,6 +55,7 @@ class RichQAOASearchSpace:
     cost_primitive: Sequence[CostPrimitive] = (CostPrimitive.SAMPLER,)
     return_distribution: Sequence[bool | None] = (None,)
     mitigation_profile: Sequence[MitigationProfile] = (MitigationProfile.NONE,)
+    ansatz_choice: Sequence[AnsatzChoice] = (AnsatzChoice.QAOA,)
 
     # Lean defaults (explicitly set to QAOA's standard choices):
     initial_state: Sequence[InitialStateChoice] = (InitialStateChoice.UNIFORM_H,)
@@ -194,6 +195,7 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
         cost_primitive = _cat(trial, "cost_primitive", self.space.cost_primitive)
         return_distribution = _cat(trial, "return_distribution", self.space.return_distribution)
         mitigation_profile = _cat(trial, "mitigation_profile", self.space.mitigation_profile)
+        ansatz_choice = _cat(trial, "ansatz_choice", self.space.ansatz_choice)
 
         # Choose a classical optimizer tuner, then let it suggest its own params.
         idx = trial.suggest_int("classical_optimizer_idx", 0, len(self.classical_optimizer_tuners) - 1)
@@ -239,7 +241,9 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
         else:
             build_callback = lambda _qubo, _n: None
 
-        if initial_point == InitialPointChoice.CONSTANT:
+        if ansatz_choice != AnsatzChoice.QAOA:
+            build_initial_point = lambda _qubo, _n, _r: None
+        elif initial_point == InitialPointChoice.CONSTANT:
             v = _cat(trial, "constant_initial_point", self.space.constant_initial_point)
             build_initial_point = lambda _qubo, _n, r: [v] * (2 * r)
         elif initial_point == InitialPointChoice.FOURIER:
@@ -275,6 +279,7 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
             transpile_strategy=transpile_strategy,
             cost_primitive=cost_primitive,
             return_distribution=return_distribution,
+            ansatz_choice=ansatz_choice,
             build_initial_state=build_initial_state,
             build_mixer=build_mixer,
             build_callback=build_callback,

@@ -106,10 +106,14 @@ class CostPrimitive(Enum):
     SAMPLER = "sampler"
     ESTIMATOR = "estimator"
 
+class AnsatzChoice(Enum):
+    QAOA = "qaoa_ansatz"
+    EFFICIENT_SU2 = "efficient_su2"
+
 
 @dataclass
 class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun, ProblemSummary]):
-    """Solve QUBOs using QAOAAnsatz + SamplerV2 + classical outer loop."""
+    """Solve QUBOs using a parameterized circuit + SamplerV2/EstimatorV2 outer loop."""
 
     name: str = "QiskitQAOA"
     converter: Converter[P, QUBO] = field(default_factory=IdentityConverter)
@@ -131,6 +135,9 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
     transpile_strategy: TranspileStrategy = TranspileStrategy.DEFAULT
     cost_primitive: CostPrimitive = CostPrimitive.SAMPLER
     return_distribution: bool | None = None
+    ansatz_choice: AnsatzChoice = AnsatzChoice.QAOA
+    debug_sampler_result: bool = False
+    debug_sampler_result_head: int = 25
 
     # QAOA customization + post-processing
     initial_point: list[float] | None = None
@@ -154,6 +161,8 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
             "transpile_strategy": self.transpile_strategy.value,
             "cost_primitive": self.cost_primitive.value,
             "return_distribution": self.return_distribution,
+            "ansatz_choice": self.ansatz_choice.value,
+            "debug_sampler_result": self.debug_sampler_result,
             "cost_scale": self.cost_scale,
             "classical_optimizer": classical,
         }
@@ -181,7 +190,7 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
         return EstimatorV2()
 
     def _optimize(self, qubo: QUBO) -> tuple[Solution, OptimizerRun]:
-        from qiskit.circuit.library import QAOAAnsatz
+        from qiskit.circuit.library import QAOAAnsatz, efficient_su2
         from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
         op, _offset = self.encode_qubo(qubo)
@@ -191,12 +200,20 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
         n = qubo.n_vars
         hook_kwargs, hook_initial_point = self.ansatz_hook(qubo, n)
 
-        ansatz = QAOAAnsatz(
-            cost_operator=op,
-            reps=self.reps,
-            initial_state=hook_kwargs.get("initial_state"),
-            mixer_operator=hook_kwargs.get("mixer"),
-        )
+        if self.ansatz_choice == AnsatzChoice.QAOA:
+            ansatz = QAOAAnsatz(
+                cost_operator=op,
+                reps=self.reps,
+                initial_state=hook_kwargs.get("initial_state"),
+                mixer_operator=hook_kwargs.get("mixer"),
+            )
+        elif self.ansatz_choice == AnsatzChoice.EFFICIENT_SU2:
+            ansatz = efficient_su2(n, ["ry", "rz"], reps=self.reps)
+            initial_state = hook_kwargs.get("initial_state")
+            if initial_state is not None:
+                ansatz = initial_state.compose(ansatz)
+        else:
+            raise ValueError(f"Unknown ansatz_choice: {self.ansatz_choice}")
         ansatz.measure_all()
 
         if self.transpiler is not None:
@@ -332,6 +349,37 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
                 }
             except Exception:
                 pass
+
+        if self.debug_sampler_result:
+            meas = final_result.data.meas
+            arr = meas.array
+            head = max(0, int(self.debug_sampler_result_head))
+            flat = arr.reshape(-1)
+            run_meta["final_meas_num_bits"] = int(meas.num_bits)
+            run_meta["final_meas_array_shape"] = tuple(int(x) for x in arr.shape)
+            run_meta["final_meas_array_dtype"] = str(arr.dtype)
+            run_meta["final_meas_array_head_ints"] = [int(x) for x in flat[:head].tolist()]
+            try:
+                _ic = meas.get_int_counts()
+                run_meta["final_meas_int_counts_nunique"] = int(len(_ic))
+                run_meta["final_meas_int_counts_top"] = [
+                    {"state_int": int(k), "count": int(v)}
+                    for k, v in sorted(_ic.items(), key=lambda kv: kv[1], reverse=True)[:10]
+                ]
+            except Exception:
+                pass
+            try:
+                _bc = meas.get_counts()
+                run_meta["final_meas_bin_counts_nunique"] = int(len(_bc))
+                run_meta["final_meas_bin_counts_top"] = [
+                    {"bitstring": str(k), "count": int(v)}
+                    for k, v in sorted(_bc.items(), key=lambda kv: kv[1], reverse=True)[:10]
+                ]
+            except Exception:
+                pass
+            shots_meta = final_result.metadata.get("shots") if isinstance(final_result.metadata, dict) else None
+            if shots_meta is not None:
+                run_meta["final_pub_shots"] = int(shots_meta)
         return solution, OptimizerRun(
             name=self.name,
             optimizer_timestamp_start=optimizer_timestamp_start,
