@@ -136,52 +136,30 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
         raise ValueError(f"Unknown backend_choice: {self.backend_choice}")
 
     def _run_once(self, *, opt: QiskitRichQAOAOptimizer, qubo: QUBO) -> tuple[Any, int, int, int]:
-        op, _offset = opt.encode_qubo(qubo)
-        if opt.cost_scale is not None:
-            op = op * opt.cost_scale
-
-        n = qubo.n_vars
-        hook_kwargs, _hook_initial_point = opt.ansatz_hook(qubo, n)
-        ansatz = QAOAAnsatz(
-            cost_operator=op,
-            reps=opt.reps,
-            initial_state=hook_kwargs.get("initial_state"),
-            mixer_operator=hook_kwargs.get("mixer"),
-        )
-        ansatz.measure_all()
-
-        if opt.transpiler is not None:
-            compiled = opt.transpiler.run(ansatz)
-        elif opt.backend is not None:
-            layout_method: str | None = None
-            routing_method: str | None = None
-            if opt.transpile_strategy == TranspileStrategy.SABRE:
-                layout_method = "sabre"
-                routing_method = "sabre"
-            elif opt.transpile_strategy == TranspileStrategy.SABRE_LAYOUT:
-                layout_method = "sabre"
-            elif opt.transpile_strategy == TranspileStrategy.SABRE_ROUTING:
-                routing_method = "sabre"
-            compiled = generate_preset_pass_manager(
-                target=opt.backend.target,
-                optimization_level=opt.optimization_level,
-                layout_method=layout_method,
-                routing_method=routing_method,
-            ).run(ansatz)
-        else:
-            compiled = generate_preset_pass_manager(
-                backend=AerSimulator(),
-                optimization_level=opt.optimization_level,
-            ).run(ansatz)
-
-        depth = int(compiled.depth())
-        ops = compiled.count_ops()
-        swaps = int(ops.get("swap", 0))
-        n_2q = int(sum(1 for _inst, qargs, _cargs in compiled.data if len(qargs) == 2))
+        # Run once (this already transpiles internally). We read circuit metrics
+        # from optimizer metadata to avoid a second transpilation per trial.
         res = opt.optimize(qubo)
+        meta = res.run.metadata or {}
+
+        depth_raw = meta.get("circuit_depth")
+        swaps_raw = meta.get("circuit_swaps")
+        n2q_raw = meta.get("circuit_2q_ops")
+        if depth_raw is None or swaps_raw is None or n2q_raw is None:
+            raise ValueError(
+                "Optimizer did not report circuit metrics in metadata. "
+                "Expected keys: circuit_depth, circuit_swaps, circuit_2q_ops."
+            )
+        depth = int(depth_raw)
+        swaps = int(swaps_raw)
+        n_2q = int(n2q_raw)
         return res, depth, swaps, n_2q
 
-    def _evaluate(self, trial: optuna.Trial) -> float:
+    def build_optimizer_for_trial(self, trial: optuna.Trial) -> tuple[QiskitRichQAOAOptimizer, dict[str, Any]]:
+        """Build a QAOA optimizer from a trial's suggested parameters.
+
+        This is useful to (re)create the tuned optimizer configuration outside of Optuna
+        after selecting best params, without duplicating the trial-to-config mapping.
+        """
         if not self.classical_optimizer_tuners:
             raise ValueError("classical_optimizer_tuners must be provided (top-10 list)")
 
@@ -197,11 +175,9 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
         mitigation_profile = _cat(trial, "mitigation_profile", self.space.mitigation_profile)
         ansatz_choice = _cat(trial, "ansatz_choice", self.space.ansatz_choice)
 
-        # Choose a classical optimizer tuner, then let it suggest its own params.
         idx = trial.suggest_int("classical_optimizer_idx", 0, len(self.classical_optimizer_tuners) - 1)
-        cot = self.classical_optimizer_tuners[idx]
-        classical_optimizer = cot.suggest(trial)
-        trial.set_user_attr("classical_optimizer", cot.__class__.__name__)
+        classical_tuner = self.classical_optimizer_tuners[idx]
+        classical_optimizer = classical_tuner.suggest(trial)
 
         initial_state = _cat(trial, "initial_state", self.space.initial_state)
         mixer = _cat(trial, "mixer", self.space.mixer)
@@ -292,6 +268,15 @@ class RichQAOAParamTuner(ParamTuner[QUBO]):
             if opt.sampler is None:
                 raise ValueError("mitigation_profile requires an explicit sampler to be provided")
             apply_mitigation_profile(sampler=opt.sampler, profile=mitigation_profile)
+
+        meta = {
+            "classical_optimizer": classical_tuner.__class__.__name__,
+        }
+        return opt, meta
+
+    def _evaluate(self, trial: optuna.Trial) -> float:
+        opt, meta = self.build_optimizer_for_trial(trial=trial)
+        trial.set_user_attr("classical_optimizer", meta.get("classical_optimizer"))
 
         trial.set_user_attr("n_qubits", self.qubo.n_vars)
         res, depth, swaps, n_2q = self._run_once(opt=opt, qubo=self.qubo)

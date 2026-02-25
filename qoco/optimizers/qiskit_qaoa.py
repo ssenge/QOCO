@@ -243,6 +243,17 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
                 optimization_level=self.optimization_level,
             ).run(ansatz)
 
+        # Circuit metrics (used by tuning / analysis to penalize expensive circuits)
+        try:
+            run_circuit_depth = int(transpiled.depth())
+            run_ops = transpiled.count_ops()
+            run_circuit_swaps = int(run_ops.get("swap", 0))
+            run_circuit_2q_ops = int(sum(1 for _inst, qargs, _cargs in transpiled.data if len(qargs) == 2))
+        except Exception:
+            run_circuit_depth = 0
+            run_circuit_swaps = 0
+            run_circuit_2q_ops = 0
+
         z_masks, coeffs = _precompute_z_masks(op)
         aggregation = hook_kwargs.get("aggregation")
         callback_fn = hook_kwargs.get("callback")
@@ -269,7 +280,10 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
                 cost = float(est_result.data.evs)
             else:
                 sampler = self.make_sampler()
-                job = sampler.run([(transpiled, list(params))])
+                if self.shots is not None:
+                    job = sampler.run([(transpiled, list(params), int(self.shots))])
+                else:
+                    job = sampler.run([(transpiled, list(params))])
                 result = job.result()[0]
                 counts = result.data.meas.get_int_counts()
                 total_shots = sum(counts.values())
@@ -298,7 +312,10 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
 
         # Final sampling with optimal parameters (needed to produce a Solution).
         sampler = self.make_sampler()
-        final_job = sampler.run([(transpiled, list(opt_result.x))])
+        if self.shots is not None:
+            final_job = sampler.run([(transpiled, list(opt_result.x), int(self.shots))])
+        else:
+            final_job = sampler.run([(transpiled, list(opt_result.x))])
         final_result = final_job.result()[0]
         final_counts = final_result.data.meas.get_int_counts()
         total_shots = sum(final_counts.values())
@@ -327,6 +344,9 @@ class QiskitQAOAOptimizer(Generic[P], Optimizer[P, QUBO, Solution, OptimizerRun,
         )
 
         run_meta: dict[str, Any] = {"cost_trace": cost_trace, "qaoa_config": self.config_metadata()}
+        run_meta["circuit_depth"] = run_circuit_depth
+        run_meta["circuit_swaps"] = run_circuit_swaps
+        run_meta["circuit_2q_ops"] = run_circuit_2q_ops
         if cost_trace:
             run_meta["nfev"] = len(cost_trace)
             run_meta["best_cost"] = min(cost_trace)

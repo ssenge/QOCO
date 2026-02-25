@@ -49,8 +49,10 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Optim
         if self.mip_gap is not None:
             solver.options['mip_rel_gap'] = self.mip_gap
         
+        # IMPORTANT: appsi_highs raises if no feasible solution exists and we try to load it.
+        # We first solve with load_solutions=False to safely get termination condition.
         optimizer_timestamp_start = datetime.now(timezone.utc)
-        result = solver.solve(model, tee=self.verbose)
+        result = solver.solve(model, tee=self.verbose, load_solutions=False)
         optimizer_timestamp_end = datetime.now(timezone.utc)
         
         # Map termination condition to Status
@@ -63,23 +65,36 @@ class HiGHSOptimizer(Generic[P], Optimizer[P, pyo.ConcreteModel, Solution, Optim
             status = Status.INFEASIBLE
         else:
             status = Status.UNKNOWN
-        
-        # Extract variable values
-        var_values = {}
+
+        # Only load a solution into the Pyomo model when we expect one to exist.
         if status in (Status.OPTIMAL, Status.FEASIBLE):
-            for var in model.component_objects(pyo.Var, active=True):
-                for idx in var:
-                    v = var[idx]
-                    val = pyo.value(v)
-                    if val is not None:
-                        var_values[v.name] = val
+            try:
+                solver.solve(model, tee=False, load_solutions=True)
+            except Exception:
+                status = Status.UNKNOWN
         
-        # Get objective value
-        try:
-            obj_val = pyo.value(model.obj) if status in (Status.OPTIMAL, Status.FEASIBLE) else float('inf')
-        except:
-            obj_val = float('inf')
-            status = Status.UNKNOWN
+        # Extract variable values.
+        #
+        # IMPORTANT: Pyomo variables can be scalar or indexed. Iterating `for idx in var`
+        # crashes for scalar vars. Using component_data_objects yields VarData for both.
+        var_values: dict[str, float] = {}
+        if status in (Status.OPTIMAL, Status.FEASIBLE):
+            for v in model.component_data_objects(pyo.Var, active=True, descend_into=True):
+                val = pyo.value(v)
+                if val is None:
+                    continue
+                var_values[str(v.name)] = float(val)
+
+        # Get objective value (do not assume an objective named `obj`).
+        obj_val = float("inf")
+        if status in (Status.OPTIMAL, Status.FEASIBLE):
+            objectives = list(model.component_data_objects(pyo.Objective, active=True, descend_into=True))
+            if objectives:
+                try:
+                    obj_val = float(pyo.value(objectives[0]))
+                except Exception:
+                    obj_val = float("inf")
+                    status = Status.UNKNOWN
         
         solution = Solution(
             status=status,
